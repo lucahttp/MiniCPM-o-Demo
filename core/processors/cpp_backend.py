@@ -949,6 +949,24 @@ class CppBackendWorker:
 
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
+        env["HIP_VISIBLE_DEVICES"] = str(self.gpu_id)
+        
+        # Discover ROCm 10.0 or 7.14 path
+        rocm_candidates = [
+            r"D:\rocm\gfx103X-10.0.0",
+            os.path.expanduser(r"~/.cache/lemonade/bin/therock/gfx103X-7.14.0"),
+            r"C:\opt\rocm",
+        ]
+        rocm_path = next((p for p in rocm_candidates if os.path.isdir(p)), rocm_candidates[0])
+        rocm_bin = os.path.join(rocm_path, "bin")
+        rocm_llvm_bin = os.path.join(rocm_path, "lib", "llvm", "bin")
+
+        hip_candidates = [
+            os.path.join(self.llamacpp_root, "build_hip10", "bin"),
+            os.path.join(self.llamacpp_root, "build_hip", "bin"),
+        ]
+        hip_bin = next((p for p in hip_candidates if os.path.isdir(p)), hip_candidates[0])
+        env["PATH"] = f"{hip_bin};{rocm_bin};{rocm_llvm_bin};" + env.get("PATH", "")
 
         cmd = [
             server_bin,
@@ -957,8 +975,10 @@ class CppBackendWorker:
             "--model", model_path,
             "--ctx-size", str(self.ctx_size),
             "--n-gpu-layers", str(self.n_gpu_layers),
+            "--threads", "8",
+            "--ubatch-size", "512",
             "--repeat-penalty", "1.05",
-            "--temp", "0.7",
+            "--temp", "0.6",
         ]
 
         logger.info(f"Starting C++ server: {' '.join(cmd)}")
@@ -974,10 +994,7 @@ class CppBackendWorker:
             try:
                 for line in self._cpp_process.stdout:
                     stripped = line.rstrip()
-                    if any(kw in stripped for kw in ("TTS", "T2W", "LLM->TTS", "wav_", "tts_thread", "generate_audio", "speek_done", "break_event", "lang", "language", "omni_set_language", "prefill", "change")):
-                        logger.info(f"[CPP] {stripped}")
-                    else:
-                        logger.debug(f"[CPP] {stripped}")
+                    logger.info(f"[CPP] {stripped}")
             except Exception:
                 pass
 
@@ -1007,10 +1024,19 @@ class CppBackendWorker:
         candidates = []
         if is_win:
             candidates += [
+                os.path.join(self.llamacpp_root, "build_hip10", "bin", "llama-omni-server.exe"),
+                os.path.join(self.llamacpp_root, "build_hip", "bin", "llama-omni-server.exe"),
+                os.path.join(self.llamacpp_root, "build", "bin", "Release", "llama-omni-server.exe"),
+                os.path.join(self.llamacpp_root, "build", "bin", "Debug", "llama-omni-server.exe"),
+                os.path.join(self.llamacpp_root, "build", "bin", "llama-omni-server.exe"),
                 os.path.join(self.llamacpp_root, "build", "bin", "Release", "llama-server.exe"),
+                os.path.join(self.llamacpp_root, "build", "bin", "Debug", "llama-server.exe"),
                 os.path.join(self.llamacpp_root, "build", "bin", "llama-server.exe"),
             ]
         candidates += [
+            os.path.join(self.llamacpp_root, "build_hip10/bin/llama-omni-server"),
+            os.path.join(self.llamacpp_root, "build/bin/llama-omni-server"),
+            os.path.join(self.llamacpp_root, "build/bin/Release/llama-omni-server"),
             os.path.join(self.llamacpp_root, "build/bin/llama-server"),
             os.path.join(self.llamacpp_root, "build/bin/Release/llama-server"),
         ]
@@ -1038,7 +1064,7 @@ class CppBackendWorker:
             "model_dir": self.model_dir,
             "tts_bin_dir": tts_bin_dir,
             "tts_gpu_layers": 100,
-            "token2wav_device": "gpu:0",
+            "token2wav_device": "cpu",
             "output_dir": self._output_dir,
         }
 
