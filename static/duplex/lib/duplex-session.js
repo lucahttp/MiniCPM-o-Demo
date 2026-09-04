@@ -354,6 +354,7 @@ export class DuplexSession {
             case 'result': this._handleResult(msg); break;
             case 'audio_only':
                 if (msg.audio_data) {
+                    if (!this.audioPlayer.turnActive) this.audioPlayer.beginTurn();
                     this.audioPlayer.playChunk(msg.audio_data, performance.now());
                 }
                 break;
@@ -372,7 +373,8 @@ export class DuplexSession {
                 this.onSystemLog('Session resumed');
                 break;
             case 'interrupted':
-                this.onSystemLog('Interrupted (deprecated)');
+                this.audioPlayer.stopAll();
+                this.onSystemLog('Interrupted by user speech');
                 break;
             case 'stopped':
                 this.onSystemLog('Session stopped by server');

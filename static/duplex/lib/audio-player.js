@@ -165,7 +165,11 @@ export class AudioPlayer {
             this._startPlayback();
         }
         this._turnActive = false;
-        this._stopAheadMonitor();
+        if (!this._playing || this._sources.length === 0) {
+            this._stopAheadMonitor();
+            this._lastAheadMs = 0;
+            this._emitMetrics({ isPlaying: false, ahead: 0 });
+        }
         const ahead = this._playing
             ? ((this._nextTime - this._ctx.currentTime) * 1000).toFixed(0)
             : '0';
@@ -198,9 +202,15 @@ export class AudioPlayer {
         buffer.getChannelData(0).set(samples);
         const source = this._ctx.createBufferSource();
         source.buffer = buffer;
-        source.connect(this._ctx.destination);
+        
+        const gainNode = this._ctx.createGain();
+        source.connect(gainNode);
+        gainNode.connect(this._ctx.destination);
 
         const now = this._ctx.currentTime;
+        let scheduleTime = this._nextTime;
+        let offset = 0;
+
         if (this._nextTime < now) {
             const gapMs = (now - this._nextTime) * 1000;
             if (gapMs > 10) {
@@ -218,7 +228,19 @@ export class AudioPlayer {
                     setTimeout(() => this.onGap(info), 0);
                 }
             }
-            this._nextTime = now;
+            
+            // Jitter buffer smoothing: prevent accumulating timeline shifts
+            // by skipping the late portion of the chunk.
+            offset = now - this._nextTime;
+            if (offset >= buffer.duration) {
+                this._nextTime += buffer.duration;
+                return; // Drop entirely
+            }
+            scheduleTime = now;
+            
+            // Smoothly fade in to avoid clicking
+            gainNode.gain.setValueAtTime(0, scheduleTime);
+            gainNode.gain.linearRampToValueAtTime(1, scheduleTime + 0.02);
         }
 
         if (this.onRawAudio && rawSamples) {
@@ -227,13 +249,19 @@ export class AudioPlayer {
             this.onRawAudio(rawSamples, this._outputSR_expected, playbackMs);
         }
 
-        source.start(this._nextTime);
+        source.start(scheduleTime, offset);
         this._nextTime += buffer.duration;
 
-        this._sources.push(source);
+        this._sources.push({ source, gainNode });
         source.onended = () => {
-            const idx = this._sources.indexOf(source);
+            const idx = this._sources.findIndex(s => s.source === source);
             if (idx >= 0) this._sources.splice(idx, 1);
+            if (this._sources.length === 0 && this._pendingChunks.length === 0) {
+                this._playing = false;
+                this._stopAheadMonitor();
+                this._lastAheadMs = 0;
+                this._emitMetrics({ isPlaying: false, ahead: 0 });
+            }
         };
     }
 
@@ -242,6 +270,7 @@ export class AudioPlayer {
         if (!this.onMetrics) return;
         const data = {
             ahead: this._lastAheadMs,
+            isPlaying: this._playing,
             gapCount: this._gapCount,
             totalShift: this._totalShiftMs,
             turn: this._turnIdx,
@@ -260,8 +289,15 @@ export class AudioPlayer {
                 return;
             }
             const ahead = (this._nextTime - this._ctx.currentTime) * 1000;
+            if (ahead <= 0 && this._sources.length === 0 && this._pendingChunks.length === 0) {
+                this._playing = false;
+                this._stopAheadMonitor();
+                this._lastAheadMs = 0;
+                this._emitMetrics({ isPlaying: false, ahead: 0 });
+                return;
+            }
             this._lastAheadMs = Math.max(0, ahead);
-            this._emitMetrics();
+            this._emitMetrics({ isPlaying: true });
         }, 200);
     }
 
@@ -272,9 +308,10 @@ export class AudioPlayer {
     _stopAllSources() {
         if (this._delayTimer) { clearTimeout(this._delayTimer); this._delayTimer = null; }
         this._stopAheadMonitor();
-        for (const src of this._sources) {
-            try { src.stop(); } catch (_) {}
-            try { src.disconnect(); } catch (_) {}
+        for (const s of this._sources) {
+            try { s.source.stop(); } catch (_) {}
+            try { s.source.disconnect(); } catch (_) {}
+            try { s.gainNode.disconnect(); } catch (_) {}
         }
         this._sources = [];
         this._playing = false;

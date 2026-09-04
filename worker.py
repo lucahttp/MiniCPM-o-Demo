@@ -605,14 +605,25 @@ class MiniCPMOWorker:
             max_slice_nums=max_slice_nums,
         )
 
-    def duplex_generate(self, force_listen: bool = False) -> DuplexGenerateResult:
+    def duplex_generate(
+        self,
+        force_listen: bool = False,
+        speak_prob_scale: Optional[float] = None,
+        listen_prob_scale: Optional[float] = None,
+        **kwargs,
+    ) -> DuplexGenerateResult:
         """Duplex 生成
         
         Args:
             force_listen: 前端 Force Listen 开关，强制本次生成为 listen
         """
         duplex_view = self.processor.set_duplex_mode()
-        return duplex_view.generate(force_listen=force_listen)
+        gen_kwargs = {"force_listen": force_listen}
+        if listen_prob_scale is not None:
+            gen_kwargs["listen_prob_scale"] = listen_prob_scale
+        if speak_prob_scale is not None:
+            gen_kwargs["speak_prob_scale"] = speak_prob_scale
+        return duplex_view.generate(**gen_kwargs)
 
     def duplex_finalize(self) -> None:
         """Duplex 延迟 finalize（feed 终止符 + 滑窗维护）
@@ -2157,6 +2168,11 @@ async def duplex_ws(ws: WebSocket):
     audio_chunk_stats_task: Optional[asyncio.Task] = None
     dropped_audio_chunk_count = 0
     processed_audio_chunk_count = 0
+    user_speech_active = False
+    consecutive_speech_chunks = 0
+    consecutive_silence_chunks = 0
+    model_speaking = False
+    model_speak_chunks = 0
 
     async def pause_timeout_watchdog(timeout: float):
         """暂停超时看门狗"""
@@ -2171,7 +2187,7 @@ async def duplex_ws(ws: WebSocket):
             pass
 
     async def _process_audio_chunk(msg: Dict[str, Any]) -> None:
-        nonlocal chunk_idx, dropped_audio_chunk_count
+        nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks
         if worker.state.status == WorkerStatus.DUPLEX_PAUSED:
             await ws.send_json({"type": "error", "error": "Worker is paused"})
             return
@@ -2212,6 +2228,79 @@ async def duplex_ws(ws: WebSocket):
         # per-chunk HD vision override（fallback 到 session 默认值）
         chunk_max_slice_nums: int = msg.get("max_slice_nums", session_max_slice_nums)
 
+        # VAD 能量检测与动态轮次引导 (Turn Steering & Barge-in)
+        audio_rms = float(np.sqrt(np.mean(audio_waveform ** 2))) if len(audio_waveform) > 0 else 0.0
+        SPEECH_ENERGY_THRESHOLD = 0.012
+        SILENCE_ENERGY_THRESHOLD = 0.006
+
+        user_is_speaking = audio_rms >= SPEECH_ENERGY_THRESHOLD
+        user_is_silent = audio_rms <= SILENCE_ENERGY_THRESHOLD
+
+        if model_speaking and user_is_speaking:
+            # 用户在模型说话时插话 -> 触发打断 (Barge-in)!
+            logger.info(f"[Duplex] User barge-in interrupt (audio_rms={audio_rms:.4f})")
+            try:
+                worker.duplex_stop()  # 触发 break，中断当前 TTS 和 LLM
+            except Exception as e:
+                logger.warning(f"Barge-in break failed: {e}")
+            await ws.send_json({"type": "interrupted"})
+            model_speaking = False
+            model_speak_chunks = 0
+            user_speech_active = True
+            consecutive_speech_chunks = 1
+            consecutive_silence_chunks = 0
+            lps = 2.5
+            sps = 0.1
+        elif user_is_speaking:
+            # 用户正在发言
+            user_speech_active = True
+            consecutive_speech_chunks += 1
+            consecutive_silence_chunks = 0
+            lps = 2.2
+            sps = 0.1
+        elif user_speech_active and (user_is_silent or consecutive_silence_chunks > 0):
+            # 用户发言后停顿
+            consecutive_silence_chunks += 1
+            if consecutive_silence_chunks == 1:
+                # 停顿第 1 个 chunk (400ms)：强力引导模型开口回复
+                lps = 0.15
+                sps = 2.8
+                user_speech_active = False
+                consecutive_speech_chunks = 0
+                consecutive_silence_chunks = 0
+            else:
+                user_speech_active = False
+                consecutive_speech_chunks = 0
+                consecutive_silence_chunks = 0
+                lps = 1.0
+                sps = 1.0
+        elif model_speaking:
+            # 模型正在发言
+            model_speak_chunks += 1
+            if model_speak_chunks <= 4:
+                # 0-1.6 秒：完全自然生成
+                lps = 1.0
+                sps = 1.0
+            elif model_speak_chunks <= 7:
+                # 1.6-2.8 秒：适度引导收尾（1-2句话）
+                lps = 1.4
+                sps = 0.8
+            elif model_speak_chunks <= 10:
+                # 2.8-4.0 秒：强力引导收尾
+                lps = 2.2
+                sps = 0.3
+            else:
+                # > 4.0 秒：坚决刹车切回监听，防止跑火车
+                lps = 3.5
+                sps = 0.05
+        elif chunk_force_listen:
+            lps = 2.5
+            sps = 0.1
+        else:
+            # 双方静默等待
+            lps = 1.0
+            sps = 1.0
+
         try:
             # 等待上一轮 finalize 完成（保证 KV cache 状态一致）
             await finalize_done.wait()
@@ -2225,7 +2314,11 @@ async def duplex_ws(ws: WebSocket):
                     max_slice_nums=chunk_max_slice_nums,
                 )
                 t_prefill = time.perf_counter()
-                gen_result = worker.duplex_generate(force_listen=chunk_force_listen)
+                gen_result = worker.duplex_generate(
+                    force_listen=chunk_force_listen,
+                    speak_prob_scale=sps,
+                    listen_prob_scale=lps,
+                )
                 t_gen = time.perf_counter()
 
                 prefill_ms = (t_prefill - t0) * 1000
@@ -2233,6 +2326,12 @@ async def duplex_ws(ws: WebSocket):
                 return gen_result, prefill_ms, prefill_result, kv_len
 
             result, prefill_ms, prefill_cost, kv_cache_len = await asyncio.to_thread(_duplex_step)
+
+            if result.is_listen:
+                model_speaking = False
+                model_speak_chunks = 0
+            else:
+                model_speaking = True
             result.server_send_ts = time.time()
 
             wall_clock_ms = (time.perf_counter() - t_chunk_start) * 1000
@@ -2499,7 +2598,7 @@ async def duplex_ws(ws: WebSocket):
                         async def _wav_poll_loop():
                             """独立异步任务：持续轮询 C++ T2W 生成的 WAV 文件并推送给前端。
                             同时把音频分流到 session_recorder，作为 duplex 右声道数据源。"""
-                            poll_interval = 0.1
+                            poll_interval = 0.015
                             while True:
                                 try:
                                     audio_b64, _ = await asyncio.to_thread(

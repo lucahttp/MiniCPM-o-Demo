@@ -37,14 +37,19 @@ export class MetricsPanel {
         if (data.ahead !== undefined) {
             const el = this._el('aheadDisplay');
             if (!el) return;
-            const aheadStr = `${Math.round(data.ahead)}ms`;
-            const turnStr = data.turn ? ` T${data.turn}` : '';
-            if (data.gapCount > 0) {
-                el.textContent = `${aheadStr} \u26a0${data.gapCount}${turnStr}`;
-                el.style.color = '#ff6b6b';
+            if (data.isPlaying === false || (data.ahead === 0 && !data.gapCount)) {
+                el.textContent = '\u2014';
+                el.style.color = '';
             } else {
-                el.textContent = `${aheadStr}${turnStr}`;
-                el.style.color = data.ahead > 200 ? '#4ecdc4' : data.ahead > 50 ? '#ffd93d' : '#ff6b6b';
+                const aheadStr = `${Math.round(data.ahead)}ms`;
+                const turnStr = data.turn ? ` T${data.turn}` : '';
+                if (data.gapCount > 0) {
+                    el.textContent = `${aheadStr} \u26a0${data.gapCount}${turnStr}`;
+                    el.style.color = '#ff6b6b';
+                } else {
+                    el.textContent = `${aheadStr}${turnStr}`;
+                    el.style.color = data.ahead > 200 ? '#4ecdc4' : data.ahead > 50 ? '#ffd93d' : '#ff6b6b';
+                }
             }
         }
         // Shift
@@ -203,7 +208,7 @@ export function getStatusPanelHTML() {
             <div class="status-row" data-tip="Time To First Speak: delay from last LISTEN to first SPEAK"><span>TTFS</span><span class="status-value" id="ttfsDisplay">\u2014</span></div>
             <div class="status-row" data-tip="Playback Delay: time from first SPEAK result to audio playback start"><span>PDelay</span><span class="status-value" id="pdelayDisplay">\u2014</span></div>
             <div class="status-row" data-tip="Playback continuity: schedule margin ahead of real-time + gap count"><span>Ahead</span><span class="status-value" id="aheadDisplay">\u2014</span></div>
-            <div class="status-row" data-tip="Accumulated time shift: PDelay + playback gaps"><span>Shift</span><span class="status-value" id="shiftDisplay">\u2014</span></div>
+            <div class="status-row" data-tip="Accumulated dropped audio due to late chunks (adaptive jitter buffer)"><span>Drop</span><span class="status-value" id="shiftDisplay">\u2014</span></div>
             <div class="status-row" data-tip="Network drift: latency change compared to first result"><span>Drift</span><span class="status-value" id="driftDisplay">\u2014</span></div>
         </div>`;
 }

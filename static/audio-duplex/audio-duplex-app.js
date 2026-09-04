@@ -956,7 +956,7 @@ async function startSession() {
 
     // Build prepare payload
     const preparePayload = {
-        config: { length_penalty: parseFloat(document.getElementById('duplexLengthPenalty').value) || 1.05 },
+        config: { length_penalty: parseFloat(document.getElementById('duplexLengthPenalty').value) || 1.0 },
     };
     const refBase64 = refAudio.getBase64();
     if (refBase64) preparePayload.ref_audio_base64 = refBase64;

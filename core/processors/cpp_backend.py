@@ -40,13 +40,17 @@ _AUDIO_OUTPUT_SR = 24000
 # System prompt 模板 — 来自 modeling_minicpmo.py audio_assistant 模式
 # key: (duplex, lang) → (voice_clone_prompt, assistant_prompt)
 _SYSTEM_PROMPTS: Dict[tuple, Dict[str, str]] = {
-    # 双工模式 — 语言无关，固定英文 prompt
+    # 双工模式 — 更加主动、响应迅速
     (True, "zh"): {
-        "voice_clone_prompt": "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant.\n<|audio_start|>",
+        "voice_clone_prompt": "<|im_start|>system\nStreaming Duplex Conversation! You are a highly responsive, conversational assistant. Speak immediately and proactively after the user stops talking. Do not stay silent. Keep responses natural and concise.\n<|audio_start|>",
         "assistant_prompt":   "<|audio_end|><|im_end|>\n",
     },
     (True, "en"): {
-        "voice_clone_prompt": "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant.\n<|audio_start|>",
+        "voice_clone_prompt": "<|im_start|>system\nStreaming Duplex Conversation! You are a highly responsive, conversational assistant. Speak immediately and proactively after the user stops talking. Do not stay silent. Keep responses natural and concise.\n<|audio_start|>",
+        "assistant_prompt":   "<|audio_end|><|im_end|>\n",
+    },
+    (True, "es"): {
+        "voice_clone_prompt": "<|im_start|>system\n¡Conversación dúplex en streaming! Eres un asistente conversacional muy receptivo. Habla inmediatamente y de forma proactiva después de que el usuario deje de hablar. No te quedes en silencio. Mantén tus respuestas naturales y concisas.\n<|audio_start|>",
         "assistant_prompt":   "<|audio_end|><|im_end|>\n",
     },
     # 非双工 — 中文
@@ -63,6 +67,15 @@ _SYSTEM_PROMPTS: Dict[tuple, Dict[str, str]] = {
                               "Please answer the user's questions seriously and in a high quality. "
                               "Please chat with the user in a highly human-like and oral style. "
                               "You are a helpful assistant developed by ModelBest: MiniCPM-Omni."
+                              "<|im_end|>\n<|im_start|>user\n",
+    },
+    # 非双工 — 西班牙语
+    (False, "es"): {
+        "voice_clone_prompt": "<|im_start|>system\nClona la voz en el prompt de audio proporcionado.\n<|audio_start|>",
+        "assistant_prompt":   "<|audio_end|>Por favor, asiste a los usuarios manteniendo este estilo de voz. "
+                              "Responde a las preguntas del usuario de forma seria y con alta calidad. "
+                              "Chatea con el usuario de una manera muy oral y parecida a la humana. "
+                              "Eres un asistente útil desarrollado por ModelBest: MiniCPM-Omni."
                               "<|im_end|>\n<|im_start|>user\n",
     },
 }
@@ -144,6 +157,7 @@ def _build_prompts_from_content(
 # 与 omni_context 中的字段一一对应；新增需同步 server.cpp + omni.h。
 _CPP_SAMPLING_KEYS = (
     "listen_prob_scale",
+    "speak_prob_scale",
     "force_listen_count",
     "max_new_speak_tokens_per_chunk",
     "tts_temperature",
@@ -225,7 +239,7 @@ class CppBackendWorker:
         self._last_duplex_mode: Optional[bool] = None
         self._last_media_type: int = 2
         self._last_lang: str = "zh"
-        self._duplex_length_penalty: float = 1.1
+        self._duplex_length_penalty: float = 0.9
 
         self._duplex_chunk_counter: int = 0
         self._current_session_id: Optional[str] = None
@@ -281,7 +295,7 @@ class CppBackendWorker:
         media_type: int = 2,
         lang: Optional[str] = None,
         system_content: Any = None,
-        length_penalty: float = 1.1,
+        length_penalty: float = 0.9,
         sampling: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Duplex 准备 → update_session_config
@@ -341,18 +355,37 @@ class CppBackendWorker:
         self._cleanup_temp_files(temp_audio, temp_image)
         return {"n_vision_images": n_vision_images}
 
-    def duplex_generate(self, force_listen: bool = False) -> "DuplexGenerateResult":
+    def duplex_generate(
+        self,
+        force_listen: bool = False,
+        speak_prob_scale: Optional[float] = None,
+        listen_prob_scale: Optional[float] = None,
+    ) -> "DuplexGenerateResult":
         """Duplex 生成 → /v1/stream/decode + scan WAV files"""
         from core.schemas.duplex import DuplexGenerateResult
 
         t0 = time.perf_counter()
 
+        if listen_prob_scale is not None or speak_prob_scale is not None:
+            lps = float(listen_prob_scale) if listen_prob_scale is not None else 1.0
+            sps = float(speak_prob_scale) if speak_prob_scale is not None else 1.0
+        elif force_listen:
+            lps = 2.5
+            sps = 0.1
+        else:
+            lps = 1.0
+            sps = 1.0
+
+        payload = {
+            "stream": True,
+            "length_penalty": float(self._duplex_length_penalty),
+            "listen_prob_scale": lps,
+            "speak_prob_scale": sps,
+        }
+
         resp = self._http_client.post(
             f"{self._cpp_server_url}/v1/stream/decode",
-            json={
-                "stream": True,
-                "length_penalty": float(self._duplex_length_penalty),
-            },
+            json=payload,
             timeout=600.0,
         )
 
@@ -962,8 +995,8 @@ class CppBackendWorker:
         rocm_llvm_bin = os.path.join(rocm_path, "lib", "llvm", "bin")
 
         hip_candidates = [
-            os.path.join(self.llamacpp_root, "build_hip10", "bin"),
             os.path.join(self.llamacpp_root, "build_hip", "bin"),
+            os.path.join(self.llamacpp_root, "build_hip10", "bin"),
         ]
         hip_bin = next((p for p in hip_candidates if os.path.isdir(p)), hip_candidates[0])
         env["PATH"] = f"{hip_bin};{rocm_bin};{rocm_llvm_bin};" + env.get("PATH", "")
@@ -977,8 +1010,8 @@ class CppBackendWorker:
             "--n-gpu-layers", str(self.n_gpu_layers),
             "--threads", "8",
             "--ubatch-size", "512",
-            "--repeat-penalty", "1.05",
-            "--temp", "0.6",
+            "--repeat-penalty", "1.02",
+            "--temp", "0.7",
         ]
 
         logger.info(f"Starting C++ server: {' '.join(cmd)}")
@@ -1024,8 +1057,8 @@ class CppBackendWorker:
         candidates = []
         if is_win:
             candidates += [
-                os.path.join(self.llamacpp_root, "build_hip10", "bin", "llama-omni-server.exe"),
                 os.path.join(self.llamacpp_root, "build_hip", "bin", "llama-omni-server.exe"),
+                os.path.join(self.llamacpp_root, "build_hip10", "bin", "llama-omni-server.exe"),
                 os.path.join(self.llamacpp_root, "build", "bin", "Release", "llama-omni-server.exe"),
                 os.path.join(self.llamacpp_root, "build", "bin", "Debug", "llama-omni-server.exe"),
                 os.path.join(self.llamacpp_root, "build", "bin", "llama-omni-server.exe"),
@@ -1034,8 +1067,8 @@ class CppBackendWorker:
                 os.path.join(self.llamacpp_root, "build", "bin", "llama-server.exe"),
             ]
         candidates += [
+            os.path.join(self.llamacpp_root, "build_hip/bin/llama-omni-server"),
             os.path.join(self.llamacpp_root, "build_hip10/bin/llama-omni-server"),
-            os.path.join(self.llamacpp_root, "build/bin/llama-omni-server"),
             os.path.join(self.llamacpp_root, "build/bin/Release/llama-omni-server"),
             os.path.join(self.llamacpp_root, "build/bin/llama-server"),
             os.path.join(self.llamacpp_root, "build/bin/Release/llama-server"),
@@ -1064,7 +1097,7 @@ class CppBackendWorker:
             "model_dir": self.model_dir,
             "tts_bin_dir": tts_bin_dir,
             "tts_gpu_layers": 100,
-            "token2wav_device": "cpu",
+            "token2wav_device": "gpu:0",
             "output_dir": self._output_dir,
         }
 
@@ -1180,6 +1213,7 @@ class CppBackendWorker:
         if sampling:
             for key in (
                 "listen_prob_scale",
+                "speak_prob_scale",
                 "force_listen_count",
                 "max_new_speak_tokens_per_chunk",
                 "tts_temperature",
