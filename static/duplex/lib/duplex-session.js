@@ -109,6 +109,9 @@ export class DuplexSession {
     /** Called after WS prepare succeeds, before media starts. Async OK. */
     async onPrepared() {}
 
+    /** Expert supervisor status update (GPT-Live style). */
+    onExpertStatus(data) {}
+
     /** Page-specific cleanup (stop media, reset UI elements). */
     onCleanup() {}
 
@@ -375,6 +378,16 @@ export class DuplexSession {
             case 'interrupted':
                 this.audioPlayer.stopAll();
                 this.onSystemLog('Interrupted by user speech');
+                break;
+            case 'expert_status':
+                this.onExpertStatus(msg);
+                if (msg.status === 'thinking') {
+                    this.onSystemLog(`🧠 Consultando experto (${msg.provider || 'AI'})...`);
+                } else if (msg.status === 'done') {
+                    this.onSystemLog(`💡 Experto (${msg.provider}): ${msg.text}`);
+                } else if (msg.status === 'cancelled') {
+                    this.onSystemLog('⏹ Consulta al experto cancelada por interrupción');
+                }
                 break;
             case 'stopped':
                 this.onSystemLog('Session stopped by server');

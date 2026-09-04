@@ -122,6 +122,10 @@ const settingsPersistence = new SettingsPersistence('audio_duplex_settings', [
     { id: 'mxMicTarget', type: 'number' },
     { id: 'mxMicTrim', type: 'range' },
     { id: 'mxMonitor', type: 'range' },
+    // Expert Supervisor
+    { id: 'expertEnabled', type: 'checkbox' },
+    { id: 'expertProvider', type: 'select' },
+    { id: 'expertAutoSpeak', type: 'checkbox' },
 ]);
 
 // Priority: HTML defaults → server defaults → localStorage → preset (highest)
@@ -288,6 +292,97 @@ function addAiLog(text) {
 }
 
 function scrollChatLog() { chatLog.scrollTop = chatLog.scrollHeight; }
+
+let currentExpertCard = null;
+
+function handleExpertStatus(msg) {
+    const prov = (msg.provider || 'Expert').toUpperCase();
+    if (msg.status === 'thinking') {
+        document.getElementById('chatEmpty').style.display = 'none';
+        const el = document.createElement('div');
+        el.className = 'conv-entry expert thinking';
+        el.innerHTML = `
+            <div class="conv-icon">&#x1F9E0;</div>
+            <div class="conv-text">
+                <span class="speaker expert-tag" style="background:#6366f1;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-right:6px;">${escapeHtml(prov)}</span>
+                <span class="expert-status-text" style="color:#6366f1;font-style:italic;">Consultando al experto... "${escapeHtml(msg.query || '')}"</span>
+            </div>
+        `;
+        chatLog.appendChild(el);
+        scrollChatLog();
+        currentExpertCard = el;
+    } else if (msg.status === 'done') {
+        const text = msg.text || '';
+        const elapsed = msg.elapsed_ms ? ` (${(msg.elapsed_ms / 1000).toFixed(1)}s)` : '';
+        if (currentExpertCard) {
+            currentExpertCard.className = 'conv-entry expert done';
+            currentExpertCard.innerHTML = `
+                <div class="conv-icon">&#x1F4A1;</div>
+                <div class="conv-text">
+                    <span class="speaker expert-tag" style="background:#10b981;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-right:6px;">${escapeHtml(prov)}</span>
+                    <span style="font-size:10px;color:#888;">${elapsed}</span>
+                    <div class="expert-content" style="margin-top:4px;color:#1e293b;line-height:1.4;">${escapeHtml(text)}</div>
+                </div>
+            `;
+            currentExpertCard = null;
+        } else {
+            document.getElementById('chatEmpty').style.display = 'none';
+            const el = document.createElement('div');
+            el.className = 'conv-entry expert done';
+            el.innerHTML = `
+                <div class="conv-icon">&#x1F4A1;</div>
+                <div class="conv-text">
+                    <span class="speaker expert-tag" style="background:#10b981;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-right:6px;">${escapeHtml(prov)}</span>
+                    <span style="font-size:10px;color:#888;">${elapsed}</span>
+                    <div class="expert-content" style="margin-top:4px;color:#1e293b;line-height:1.4;">${escapeHtml(text)}</div>
+                </div>
+            `;
+            chatLog.appendChild(el);
+        }
+        scrollChatLog();
+
+        // Speak aloud via Web Speech Synthesis if enabled
+        const autoSpeak = document.getElementById('expertAutoSpeak')?.checked;
+        if (autoSpeak && window.speechSynthesis && text) {
+            try {
+                window.speechSynthesis.cancel();
+                const utter = new SpeechSynthesisUtterance(text);
+                utter.rate = 1.05;
+                const isSpanish = /[áéíóúñ¿¡]/i.test(text) || /\b(el|la|los|las|un|una|es|son|por|para|con)\b/i.test(text);
+                utter.lang = isSpanish ? 'es-ES' : 'en-US';
+                window.speechSynthesis.speak(utter);
+            } catch (synthErr) {
+                console.warn('[Expert] Speech synthesis error:', synthErr);
+            }
+        }
+    } else if (msg.status === 'cancelled') {
+        if (currentExpertCard) {
+            currentExpertCard.className = 'conv-entry expert cancelled';
+            currentExpertCard.innerHTML = `
+                <div class="conv-icon">&#x23F9;</div>
+                <div class="conv-text">
+                    <span class="speaker expert-tag" style="background:#94a3b8;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-right:6px;">${escapeHtml(prov)}</span>
+                    <span style="color:#94a3b8;font-size:11px;font-style:italic;">Consulta al experto cancelada por interrupción</span>
+                </div>
+            `;
+            currentExpertCard = null;
+            scrollChatLog();
+        }
+    } else if (msg.status === 'error') {
+        if (currentExpertCard) {
+            currentExpertCard.className = 'conv-entry expert error';
+            currentExpertCard.innerHTML = `
+                <div class="conv-icon">&#x26A0;</div>
+                <div class="conv-text">
+                    <span class="speaker expert-tag" style="background:#ef4444;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-right:6px;">${escapeHtml(prov)}</span>
+                    <span style="color:#ef4444;font-size:11px;">Error en experto: ${escapeHtml(msg.error || '')}</span>
+                </div>
+            `;
+            currentExpertCard = null;
+            scrollChatLog();
+        }
+    }
+}
 
 // ============================================================================
 // FileAudioProvider — Audio-only file mode
@@ -850,6 +945,7 @@ async function startSession() {
     };
     session.onSpeakEnd = () => scrollChatLog();
     session.onListenResult = (result) => { if (result.text) addUserLog(result.text); };
+    session.onExpertStatus = (msg) => handleExpertStatus(msg);
     session.onRunningChange = (running) => setDuplexButtonStates(running);
     session.onPauseStateChange = (state) => {
         setDefaultPauseBtnState(state);
@@ -957,6 +1053,10 @@ async function startSession() {
     // Build prepare payload
     const preparePayload = {
         config: { length_penalty: parseFloat(document.getElementById('duplexLengthPenalty').value) || 1.0 },
+        expert_config: {
+            enabled: !!document.getElementById('expertEnabled')?.checked,
+            provider: document.getElementById('expertProvider')?.value || 'agy',
+        },
     };
     const refBase64 = refAudio.getBase64();
     if (refBase64) preparePayload.ref_audio_base64 = refBase64;
@@ -1111,6 +1211,37 @@ if (document.readyState !== 'loading') {
 } else {
     document.addEventListener('DOMContentLoaded', () => mixerCtrl.init());
 }
+
+// ============================================================================
+// Expert Supervisor UI Events
+// ============================================================================
+const expertQuickInput = document.getElementById('expertQuickInput');
+const btnAskExpert = document.getElementById('btnAskExpert');
+
+function submitExpertQuery() {
+    const query = expertQuickInput?.value?.trim();
+    if (!query) return;
+    const prov = document.getElementById('expertProvider')?.value || 'agy';
+    if (session && session.ws && session.ws.readyState === WebSocket.OPEN) {
+        session.ws.send(JSON.stringify({
+            type: 'ask_expert',
+            query: query,
+            provider: prov,
+        }));
+        addUserLog(`[Consultar a ${prov.toUpperCase()}]: ${query}`);
+        expertQuickInput.value = '';
+    } else {
+        addSystemLog(`Inicia una sesión de voz primero para consultar al experto.`);
+    }
+}
+
+btnAskExpert?.addEventListener('click', submitExpertQuery);
+expertQuickInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        submitExpertQuery();
+    }
+});
 
 // Cleanup on page unload (release mic, WS, AudioContext)
 window.addEventListener('beforeunload', () => {

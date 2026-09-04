@@ -2173,6 +2173,10 @@ async def duplex_ws(ws: WebSocket):
     consecutive_silence_chunks = 0
     model_speaking = False
     model_speak_chunks = 0
+    from core.expert import ExpertSupervisor, ExpertConfig, ExpertProvider
+    expert_supervisor = ExpertSupervisor()
+    expert_task: Optional[asyncio.Task] = None
+    accumulated_turn_text: List[str] = []
 
     async def pause_timeout_watchdog(timeout: float):
         """暂停超时看门狗"""
@@ -2185,6 +2189,50 @@ async def duplex_ws(ws: WebSocket):
             await ws.close(code=1000, reason="Pause timeout")
         except Exception:
             pass
+
+    async def _run_expert(query_text: str, prov_override: Optional[str] = None):
+        target_prov = prov_override or expert_supervisor.config.provider.value
+        try:
+            await ws.send_json({
+                "type": "expert_status",
+                "status": "thinking",
+                "query": query_text,
+                "provider": target_prov,
+            })
+            expert_res = await expert_supervisor.execute(
+                query=query_text,
+                provider_override=prov_override,
+            )
+            if expert_res.get("success"):
+                await ws.send_json({
+                    "type": "expert_status",
+                    "status": "done",
+                    "provider": expert_res["provider"],
+                    "text": expert_res["text"],
+                    "raw_text": expert_res.get("raw_text", ""),
+                    "elapsed_ms": expert_res.get("elapsed_ms", 0),
+                    "query": query_text,
+                })
+            else:
+                await ws.send_json({
+                    "type": "expert_status",
+                    "status": "error",
+                    "provider": expert_res["provider"],
+                    "error": expert_res.get("error", "Error desconocido"),
+                    "query": query_text,
+                })
+        except asyncio.CancelledError:
+            logger.info("[Duplex] Expert task cancelled")
+            try:
+                await ws.send_json({"type": "expert_status", "status": "cancelled", "provider": target_prov})
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"[Duplex] Error running expert: {e}", exc_info=True)
+            try:
+                await ws.send_json({"type": "expert_status", "status": "error", "error": str(e), "provider": target_prov})
+            except Exception:
+                pass
 
     async def _process_audio_chunk(msg: Dict[str, Any]) -> None:
         nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks
@@ -2239,6 +2287,12 @@ async def duplex_ws(ws: WebSocket):
         if model_speaking and user_is_speaking:
             # 用户在模型说话时插话 -> 触发打断 (Barge-in)!
             logger.info(f"[Duplex] User barge-in interrupt (audio_rms={audio_rms:.4f})")
+            if expert_task and not expert_task.done():
+                expert_task.cancel()
+                try:
+                    await ws.send_json({"type": "expert_status", "status": "cancelled"})
+                except Exception:
+                    pass
             try:
                 worker.duplex_stop()  # 触发 break，中断当前 TTS 和 LLM
             except Exception as e:
@@ -2253,6 +2307,12 @@ async def duplex_ws(ws: WebSocket):
             sps = 0.1
         elif user_is_speaking:
             # 用户正在发言
+            if expert_task and not expert_task.done():
+                expert_task.cancel()
+                try:
+                    await ws.send_json({"type": "expert_status", "status": "cancelled"})
+                except Exception:
+                    pass
             user_speech_active = True
             consecutive_speech_chunks += 1
             consecutive_silence_chunks = 0
@@ -2330,8 +2390,21 @@ async def duplex_ws(ws: WebSocket):
             if result.is_listen:
                 model_speaking = False
                 model_speak_chunks = 0
+                if accumulated_turn_text:
+                    turn_text = "".join(accumulated_turn_text).strip()
+                    accumulated_turn_text.clear()
+                    if expert_supervisor.is_enabled():
+                        should_delegate, extracted_query, prov_override = expert_supervisor.detect_delegation_intent(turn_text)
+                        if should_delegate:
+                            q = extracted_query or turn_text
+                            logger.info(f"[ExpertSupervisor] Delegating to expert: '{q[:80]}' (prov={prov_override or expert_supervisor.config.provider.value})")
+                            if expert_task and not expert_task.done():
+                                expert_task.cancel()
+                            expert_task = asyncio.create_task(_run_expert(q, prov_override))
             else:
                 model_speaking = True
+                if result.text:
+                    accumulated_turn_text.append(result.text)
             result.server_send_ts = time.time()
 
             wall_clock_ms = (time.perf_counter() - t_chunk_start) * 1000
@@ -2482,6 +2555,27 @@ async def duplex_ws(ws: WebSocket):
                 duplex_length_penalty = float(
                     duplex_length_penalty_value if duplex_length_penalty_value is not None else 1.1
                 )
+
+                expert_cfg_dict = msg.get("expert_config")
+                if expert_cfg_dict:
+                    try:
+                        prov_str = str(expert_cfg_dict.get("provider", "agy")).lower()
+                        prov = ExpertProvider(prov_str) if prov_str in [p.value for p in ExpertProvider] else ExpertProvider.AGY
+                        expert_config = ExpertConfig(
+                            provider=prov,
+                            enabled=bool(expert_cfg_dict.get("enabled", True)),
+                            agy_path=expert_cfg_dict.get("agy_path") or expert_supervisor.config.agy_path,
+                            claude_path=expert_cfg_dict.get("claude_path") or expert_supervisor.config.claude_path,
+                            minimax_api_key=expert_cfg_dict.get("minimax_api_key") or os.environ.get("MINIMAX_API_KEY"),
+                            minimax_group_id=expert_cfg_dict.get("minimax_group_id") or os.environ.get("MINIMAX_GROUP_ID"),
+                            openai_api_key=expert_cfg_dict.get("openai_api_key") or os.environ.get("OPENAI_API_KEY"),
+                            openai_base_url=expert_cfg_dict.get("openai_base_url") or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+                            openai_model=expert_cfg_dict.get("openai_model") or "gpt-4o-mini",
+                        )
+                        expert_supervisor = ExpertSupervisor(expert_config)
+                        logger.info(f"[Duplex] Expert supervisor configured: provider={prov.value}, enabled={expert_config.enabled}")
+                    except Exception as e:
+                        logger.warning(f"[Duplex] Failed to configure expert supervisor: {e}")
 
                 # LLM ref audio → ref_audio_path（嵌入 system prompt）
                 # TTS ref audio → prompt_wav_path（初始化 vocoder）
@@ -2699,6 +2793,17 @@ async def duplex_ws(ws: WebSocket):
                 await ws.send_json({"type": "stopped"})
                 break
 
+            elif msg_type == "ask_expert":
+                query = msg.get("query", "").strip()
+                prov_override = msg.get("provider")
+                if query and expert_supervisor.is_enabled():
+                    logger.info(f"[Duplex] Explicit ask_expert received: '{query[:80]}' (provider={prov_override})")
+                    if expert_task and not expert_task.done():
+                        expert_task.cancel()
+                    expert_task = asyncio.create_task(_run_expert(query, prov_override))
+                elif not expert_supervisor.is_enabled():
+                    await ws.send_json({"type": "expert_status", "status": "error", "error": "Expert Supervisor is disabled"})
+
             else:
                 await ws.send_json({"type": "error", "error": f"Unknown message type: {msg_type}"})
 
@@ -2707,6 +2812,13 @@ async def duplex_ws(ws: WebSocket):
     except Exception as e:
         logger.error(f"Duplex WebSocket error: {e}", exc_info=True)
     finally:
+        if expert_task and not expert_task.done():
+            expert_task.cancel()
+            try:
+                await expert_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         # 录制：finalize（flush recording.json + 更新 meta.json）
         if session_recorder:
             try:

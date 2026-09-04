@@ -132,6 +132,32 @@
                 </div>
             </div>
         </details>
+        <details class="config-group" id="expertSupervisorDetails" open>
+            <summary>Expert Supervisor</summary>
+            <div class="cg-body">
+                <div class="cg-row inline" data-tip="Enable frontier AI expert delegation (GPT-Live / AGY / Claude / MiniMax)">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;">
+                        <input type="checkbox" id="expertEnabled" checked>
+                        Enable Expert Delegation
+                    </label>
+                </div>
+                <div class="cg-row inline" data-tip="Frontier AI expert provider">
+                    <span class="cg-label" style="flex:none;">Provider</span>
+                    <select class="cg-select" id="expertProvider">
+                        <option value="agy" selected>AGY CLI (DeepMind)</option>
+                        <option value="claude">Claude CLI (Anthropic)</option>
+                        <option value="minimax">MiniMax API</option>
+                        <option value="openai">OpenAI API</option>
+                    </select>
+                </div>
+                <div class="cg-row inline" data-tip="Speak the expert response aloud using browser speech synthesis">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;">
+                        <input type="checkbox" id="expertAutoSpeak" checked>
+                        Speak Response Aloud
+                    </label>
+                </div>
+            </div>
+        </details>
         <details class="config-group">
             <summary>Audio Devices</summary>
             <div class="cg-body">
@@ -188,6 +214,12 @@
         <div class="conv-log" id="chatLog">
             <div class="conv-empty" id="chatEmpty">Start a session to begin real-time voice conversation</div>
         </div>
+    </div>
+
+    <!-- Quick Ask Expert -->
+    <div class="panel-expert-ask" style="margin-top:6px;display:flex;gap:6px;">
+        <input type="text" class="cg-input" id="expertQuickInput" placeholder="Preguntar o delegar al experto (ej: 'Explica la teoría cuántica')..." style="flex:1;font-size:12px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;">
+        <button class="ctrl-btn primary" id="btnAskExpert" style="font-size:12px;padding:6px 14px;border-radius:6px;white-space:nowrap;">Preguntar al Experto</button>
     </div>
 
     </div><!-- /col-right -->
