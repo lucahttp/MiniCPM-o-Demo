@@ -14,26 +14,20 @@ from .providers.openai_provider import OpenAIExpertProvider
 
 logger = logging.getLogger(__name__)
 
-# Trigger keywords for delegation (Spanish and English)
+# Trigger keywords for delegation (Spanish and English explicit intent)
 _EXPLICIT_TRIGGERS = [
-    # Spanish triggers
-    r"\b(preg[uú]ntale?\s+a\s+(agy|claude|minimax|experto))\b",
-    r"\b(consult[aá](le)?\s+al?\s+(agy|claude|minimax|experto))\b",
-    r"\b(experto|supervisor)\b",
-    r"\b(busca\s+(en\s+internet|info|informaci[oó]n|datos))\b",
-    r"\b(investig[aá]|averigua|analiz[aá]|expl[ií]came|desarrolla|programa|c[oó]digo)\b",
-    r"\b(cu[aá]nto\s+es|calcul[aá]|resuelve)\b",
-    r"\b(d[eé]jame\s+(consultar|averiguar|buscar|investigar|preguntar))\b",
+    # Spanish explicit delegation intent
+    r"\b(d[eé]jame|voy\s+a|un\s+segundo,?\s+voy\s+a|espera\s+que)\s+(consultar|preguntar|averiguar|pedirle|buscar)\s+(con\s+el\s+|al?\s+)?(experto|supervisor|agy|claude|minimax)\b",
+    r"\b(consult[aá](ndo|r[eé])?|pregunt[aá](ndo|r[eé])?)\s+(al?\s+|con\s+el\s+)?(experto|supervisor|agy|claude|minimax)\b",
+    r"\b(preg[uú]ntale?\s+a|consult[aá](le)?\s+al?)\s+(agy|claude|minimax|experto)\b",
+    r"\b(le\s+pregunto\s+al?\s+(experto|supervisor|agy|claude|minimax))\b",
+    r"\b(consultando\s+al?\s+(experto|supervisor|agy|claude|minimax))\b",
 
-    # English triggers
-    r"\b(expert|supervisor)\b",
-    r"\b(look\s*(up|into))\b",
-    r"\b(search(\s+(for|online|the\s+web|the\s+internet))?)\b",
-    r"\b(research|investigate|find\s+out)\b",
-    r"\b(ask\s+(the\s+)?(expert|supervisor|agy|claude|minimax))\b",
-    r"\b(consult\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax))\b",
-    r"\b(let\s+me\s+(look\s*up|check|search|investigate|find\s+out|research|consult|ask))\b",
-    r"\b(check\s+(with\s+)?(the\s+expert|online|the\s+web))\b",
+    # English explicit delegation intent
+    r"\b(let\s+me|i('ll|\s+will)|one\s+second,?\s+i'll)\s+(check|ask|consult|find\s+out|look\s*up)\s+(with\s+the\s+|the\s+)?(expert|supervisor|agy|claude|minimax)\b",
+    r"\b(consulting|asking)\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
+    r"\b(i'm\s+asking|checking\s+with)\s+(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
+    r"\b(ask(ing)?|consult(ing)?)\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
 ]
 
 _DELEGATE_TAG_REGEX = re.compile(r"\[(?:DELEGATE|EXPERT):\s*(.*?)\]", re.IGNORECASE)
@@ -121,17 +115,22 @@ class ExpertSupervisor:
     def clean_query_text(text: str) -> str:
         """Strip introductory conversational phrases so the expert gets a clean prompt."""
         q = text.strip()
+        tag_m = _DELEGATE_TAG_REGEX.search(q)
+        if tag_m:
+            return tag_m.group(1).strip()
         q = re.sub(r"^(sure|ok|okay|yes|yeah|claro|por supuesto|seguro|bien)[,\s]+", "", q, flags=re.IGNORECASE)
         q = re.sub(
             r"^(let\s+me\s+(look\s*up|check|search|investigate|find\s+out|research|consult|ask)|"
             r"i('ll|\s+will)\s+(look\s*up|check|search|investigate|find\s+out)|"
             r"d[eé]jame\s+(consultar|averiguar|buscar|investigar|preguntar)|"
-            r"voy\s+a\s+(consultar|averiguar|buscar|investigar|preguntar))\s+(about\s+|sobre\s+|para\s+)?",
+            r"voy\s+a\s+(consultar|averiguar|buscar|investigar|preguntar)|"
+            r"(un\s+segundo|un\s+momento|dame\s+un\s+segundo|dame\s+un\s+momento),?\s*(voy\s+a\s+|le\s+)?(consultar|preguntar|averiguar|pido)?|"
+            r"espera\s+(un\s+momento,?\s+|un\s+segundo,?\s+)?(que\s+)?(le\s+pregunto|consulto|averiguo)?)\s*(con\s+el\s+|al?\s+)?(experto|supervisor|agy|claude|minimax)?\s*(about\s+|sobre\s+|para\s+)?",
             "",
             q,
             flags=re.IGNORECASE
         )
-        q = re.sub(r"\b(with\s+(the\s+)?expert|al?\s+experto)\b", "", q, flags=re.IGNORECASE).strip()
+        q = re.sub(r"\b(with\s+(the\s+)?expert|al?\s+experto|con\s+el\s+experto)\b", "", q, flags=re.IGNORECASE).strip()
         q = q.strip(".,;:?! ")
         return q or text.strip()
 

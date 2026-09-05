@@ -2188,6 +2188,7 @@ async def duplex_ws(ws: WebSocket):
     expert_task: Optional[asyncio.Task] = None
     pending_expert_text: Optional[str] = None
     accumulated_turn_text: List[str] = []
+    turn_has_injected_expert: bool = False
 
     async def pause_timeout_watchdog(timeout: float):
         """暂停超时看门狗"""
@@ -2248,7 +2249,7 @@ async def duplex_ws(ws: WebSocket):
                 pass
 
     async def _process_audio_chunk(msg: Dict[str, Any]) -> None:
-        nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks, barge_in_streak, expert_task, pending_expert_text
+        nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks, barge_in_streak, expert_task, pending_expert_text, turn_has_injected_expert
         if worker.state.status == WorkerStatus.DUPLEX_PAUSED:
             await ws.send_json({"type": "error", "error": "Worker is paused"})
             return
@@ -2400,6 +2401,7 @@ async def duplex_ws(ws: WebSocket):
         if pending_expert_text and not user_is_speaking:
             text_to_inject = pending_expert_text
             pending_expert_text = None
+            turn_has_injected_expert = True
             logger.info(f"[Duplex] Injecting pending expert text to MiniCPM-o ({len(text_to_inject)} chars): '{text_to_inject[:60]}...'")
             sps = 4.0
             lps = 0.0
@@ -2438,7 +2440,8 @@ async def duplex_ws(ws: WebSocket):
                 if accumulated_turn_text:
                     turn_text = "".join(accumulated_turn_text).strip()
                     accumulated_turn_text.clear()
-                    if expert_supervisor.is_enabled():
+                    # 如果本轮发言包含了 Expert 的注入文本，坚决不再触发二次委托（防止递归死循环）
+                    if expert_supervisor.is_enabled() and not turn_has_injected_expert:
                         should_delegate, extracted_query, prov_override = expert_supervisor.detect_delegation_intent(turn_text)
                         if should_delegate:
                             q = extracted_query or turn_text
@@ -2446,6 +2449,7 @@ async def duplex_ws(ws: WebSocket):
                             if expert_task and not expert_task.done():
                                 expert_task.cancel()
                             expert_task = asyncio.create_task(_run_expert(q, prov_override))
+                    turn_has_injected_expert = False
             else:
                 model_speaking = True
                 if result.text:

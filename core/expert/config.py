@@ -37,7 +37,7 @@ class ExpertConfig(BaseModel):
 
     # General options
     timeout_seconds: float = Field(default=20.0, description="Max execution timeout in seconds")
-    auto_delegate: bool = Field(default=True, description="Automatically delegate complex questions to the expert")
+    auto_delegate: bool = Field(default=False, description="Automatically delegate complex questions to the expert")
     
     # Speech-friendly voice prompt injected into expert
     expert_system_prompt: str = Field(
