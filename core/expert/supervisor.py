@@ -32,6 +32,8 @@ _EXPLICIT_TRIGGERS = [
 
 _DELEGATE_TAG_REGEX = re.compile(r"\[(?:DELEGATE|EXPERT):\s*(.*?)\]", re.IGNORECASE)
 
+from .tools import ToolDispatcher
+
 class ExpertSupervisor:
     """Orchestrates hybrid voice delegation to specialized frontier agents (AGY, Claude, MiniMax)."""
 
@@ -52,6 +54,7 @@ class ExpertSupervisor:
                 api_base=self.config.openai_api_base or "https://api.openai.com/v1",
             ),
         }
+        self.tool_dispatcher = ToolDispatcher()
 
     @staticmethod
     def claude_path_clean(path: str) -> str:
@@ -110,6 +113,22 @@ class ExpertSupervisor:
                 return True, q, provider_override
 
         return False, None, None
+
+    def detect_tool_or_expert(self, text: str) -> Tuple[str, Optional[str], Optional[Dict[str, Any]]]:
+        """
+        Detecta si hay una herramienta rápida o un experto.
+        Retorna (tipo, nombre_herramienta_o_query, argumentos).
+        Tipo puede ser "TOOL", "EXPERT" o "NONE".
+        """
+        if not text:
+            return "NONE", None, None
+        return self.tool_dispatcher.detect_tool_or_expert(text)
+
+    def execute_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
+        """
+        Ejecuta y formatea la respuesta en 1 oración limpia lista para que MiniCPM-o la hable de inmediato.
+        """
+        return self.tool_dispatcher.execute_tool(tool_name, args)
 
     @staticmethod
     def clean_query_text(text: str) -> str:

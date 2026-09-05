@@ -2189,6 +2189,7 @@ async def duplex_ws(ws: WebSocket):
     pending_expert_text: Optional[str] = None
     accumulated_turn_text: List[str] = []
     turn_has_injected_expert: bool = False
+    session_dialog_history: List[Dict[str, str]] = []
 
     async def pause_timeout_watchdog(timeout: float):
         """暂停超时看门狗"""
@@ -2203,7 +2204,7 @@ async def duplex_ws(ws: WebSocket):
             pass
 
     async def _run_expert(query_text: str, prov_override: Optional[str] = None):
-        nonlocal pending_expert_text
+        nonlocal pending_expert_text, session_dialog_history
         target_prov = prov_override or expert_supervisor.config.provider.value
         try:
             await ws.send_json({
@@ -2212,12 +2213,17 @@ async def duplex_ws(ws: WebSocket):
                 "query": query_text,
                 "provider": target_prov,
             })
+            # Pasar los últimos 6 turnos para mantener contexto semántico y memoria
+            context_history = session_dialog_history[-6:] if session_dialog_history else None
             expert_res = await expert_supervisor.execute(
                 query=query_text,
+                history=context_history,
                 provider_override=prov_override,
             )
             if expert_res.get("success"):
                 pending_expert_text = expert_res["text"]
+                session_dialog_history.append({"role": "user", "content": query_text})
+                session_dialog_history.append({"role": "assistant", "content": expert_res["text"]})
                 await ws.send_json({
                     "type": "expert_status",
                     "status": "done",
@@ -2249,7 +2255,7 @@ async def duplex_ws(ws: WebSocket):
                 pass
 
     async def _process_audio_chunk(msg: Dict[str, Any]) -> None:
-        nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks, barge_in_streak, expert_task, pending_expert_text, turn_has_injected_expert
+        nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks, barge_in_streak, expert_task, pending_expert_text, turn_has_injected_expert, session_dialog_history
         if worker.state.status == WorkerStatus.DUPLEX_PAUSED:
             await ws.send_json({"type": "error", "error": "Worker is paused"})
             return
@@ -2440,15 +2446,53 @@ async def duplex_ws(ws: WebSocket):
                 if accumulated_turn_text:
                     turn_text = "".join(accumulated_turn_text).strip()
                     accumulated_turn_text.clear()
+                    if turn_text:
+                        session_dialog_history.append({"role": "assistant", "content": turn_text})
+                        if len(session_dialog_history) > 20:
+                            session_dialog_history = session_dialog_history[-20:]
+
                     # 如果本轮发言包含了 Expert 的注入文本，坚决不再触发二次委托（防止递归死循环）
                     if expert_supervisor.is_enabled() and not turn_has_injected_expert:
-                        should_delegate, extracted_query, prov_override = expert_supervisor.detect_delegation_intent(turn_text)
-                        if should_delegate:
-                            q = extracted_query or turn_text
-                            logger.info(f"[ExpertSupervisor] Delegating to expert: '{q[:80]}' (prov={prov_override or expert_supervisor.config.provider.value})")
+                        # 1. Verificar si hay Tool rápida local (< 50ms) o tag [EXPERT: ...]
+                        tool_type, tool_target, tool_args = expert_supervisor.detect_tool_or_expert(turn_text)
+                        if tool_type == "TOOL":
+                            ans = expert_supervisor.execute_tool(tool_target, tool_args or {})
+                            if ans.startswith("[EXPERT:"):
+                                q = ans[8:-1].strip()
+                                logger.info(f"[ToolDispatcher] Tool {tool_target} fallback to expert: '{q[:80]}'")
+                                if expert_task and not expert_task.done():
+                                    expert_task.cancel()
+                                expert_task = asyncio.create_task(_run_expert(q, None))
+                            else:
+                                logger.info(f"[ToolDispatcher] Instant tool '{tool_target}' executed (< 50ms): '{ans}'")
+                                pending_expert_text = ans
+                                session_dialog_history.append({"role": "assistant", "content": ans})
+                                try:
+                                    asyncio.create_task(ws.send_json({
+                                        "type": "expert_status",
+                                        "status": "done",
+                                        "provider": f"tool:{tool_target}",
+                                        "text": ans,
+                                        "elapsed_ms": 1.0,
+                                        "query": f"{tool_target}({tool_args})",
+                                    }))
+                                except Exception:
+                                    pass
+                        elif tool_type == "EXPERT":
+                            q = tool_target
+                            logger.info(f"[ExpertSupervisor] Delegating to expert (tag): '{q[:80]}'")
                             if expert_task and not expert_task.done():
                                 expert_task.cancel()
-                            expert_task = asyncio.create_task(_run_expert(q, prov_override))
+                            expert_task = asyncio.create_task(_run_expert(q, None))
+                        else:
+                            # 2. Fallback a detección de intención lingüística
+                            should_delegate, extracted_query, prov_override = expert_supervisor.detect_delegation_intent(turn_text)
+                            if should_delegate:
+                                q = extracted_query or turn_text
+                                logger.info(f"[ExpertSupervisor] Delegating to expert (intent): '{q[:80]}' (prov={prov_override or expert_supervisor.config.provider.value})")
+                                if expert_task and not expert_task.done():
+                                    expert_task.cancel()
+                                expert_task = asyncio.create_task(_run_expert(q, prov_override))
                     turn_has_injected_expert = False
             else:
                 model_speaking = True
