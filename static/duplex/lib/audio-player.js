@@ -94,7 +94,8 @@ export class AudioPlayer {
         this._turnActive = true;
         this._turnIdx++;
         // If previous audio has completely finished playing, reset timeline:
-        if (!this._playing || this._nextTime <= (this._ctx ? this._ctx.currentTime : 0)) {
+        const curTime = this._ctx ? this._ctx.currentTime : 0;
+        if (!this._playing || this._nextTime <= curTime) {
             this._playing = false;
             this._pendingChunks = [];
             this._nextTime = 0;
@@ -137,11 +138,22 @@ export class AudioPlayer {
         }
         this._lastArrivalTime = arrivalTime || t0;
 
-        if (this._playing) {
+        // If turn has already started playback (or is currently playing),
+        // schedule immediately to prevent mid-turn jitter pauses!
+        if (this._playing || (this._turnActive && this._playbackStartTime > 0)) {
+            if (!this._playing) {
+                this._playing = true;
+                if (this._ctx.state === 'suspended') this._ctx.resume();
+                if (this._nextTime < this._ctx.currentTime) {
+                    this._nextTime = this._ctx.currentTime;
+                }
+                this._startAheadMonitor();
+            }
             this._scheduleChunk(resampled, raw);
-            this._lastAheadMs = (this._nextTime - this._ctx.currentTime) * 1000;
-            this._emitMetrics();
+            this._lastAheadMs = Math.max(0, (this._nextTime - this._ctx.currentTime) * 1000);
+            this._emitMetrics({ isPlaying: true });
         } else {
+            // Only initial chunk(s) before turn playback starts wait for the delay buffer
             this._pendingChunks.push({ resampled, raw });
             const delayMs = this._getDelayMs();
             if (!this._delayTimer) {
@@ -168,12 +180,14 @@ export class AudioPlayer {
         }
         this._turnActive = false;
         if (!this._playing || this._sources.length === 0) {
+            this._playing = false;
+            this._playbackStartTime = 0;
             this._stopAheadMonitor();
             this._lastAheadMs = 0;
             this._emitMetrics({ isPlaying: false, ahead: 0 });
         }
-        const ahead = this._playing
-            ? ((this._nextTime - this._ctx.currentTime) * 1000).toFixed(0)
+        const ahead = (this._playing && this._ctx)
+            ? Math.max(0, (this._nextTime - this._ctx.currentTime) * 1000).toFixed(0)
             : '0';
         console.log(`[AudioPlayer] === turn #${this._turnIdx} end (remaining=${ahead}ms) ===`);
     }
@@ -192,7 +206,7 @@ export class AudioPlayer {
         this._pendingChunks = [];
 
         const pdelay = this._firstChunkTime ? (this._playbackStartTime - this._firstChunkTime) : 0;
-        this._lastAheadMs = (this._nextTime - this._ctx.currentTime) * 1000;
+        this._lastAheadMs = Math.max(0, (this._nextTime - this._ctx.currentTime) * 1000);
         this._emitMetrics({ pdelay });
         this._startAheadMonitor();
 
@@ -256,10 +270,16 @@ export class AudioPlayer {
             const idx = this._sources.findIndex(s => s.source === source);
             if (idx >= 0) this._sources.splice(idx, 1);
             if (this._sources.length === 0 && this._pendingChunks.length === 0) {
-                this._playing = false;
-                this._stopAheadMonitor();
-                this._lastAheadMs = 0;
-                this._emitMetrics({ isPlaying: false, ahead: 0 });
+                if (!this._turnActive) {
+                    this._playing = false;
+                    this._playbackStartTime = 0;
+                    this._stopAheadMonitor();
+                    this._lastAheadMs = 0;
+                    this._emitMetrics({ isPlaying: false, ahead: 0 });
+                } else {
+                    this._lastAheadMs = 0;
+                    this._emitMetrics({ isPlaying: false, ahead: 0 });
+                }
             }
         };
     }
@@ -289,11 +309,14 @@ export class AudioPlayer {
             }
             const ahead = (this._nextTime - this._ctx.currentTime) * 1000;
             if (ahead <= 0 && this._sources.length === 0 && this._pendingChunks.length === 0) {
-                this._playing = false;
-                this._stopAheadMonitor();
-                this._lastAheadMs = 0;
-                this._emitMetrics({ isPlaying: false, ahead: 0 });
-                return;
+                if (!this._turnActive) {
+                    this._playing = false;
+                    this._playbackStartTime = 0;
+                    this._stopAheadMonitor();
+                    this._lastAheadMs = 0;
+                    this._emitMetrics({ isPlaying: false, ahead: 0 });
+                    return;
+                }
             }
             this._lastAheadMs = Math.max(0, ahead);
             this._emitMetrics({ isPlaying: true });
@@ -314,6 +337,7 @@ export class AudioPlayer {
         }
         this._sources = [];
         this._playing = false;
+        this._playbackStartTime = 0;
         this._pendingChunks = [];
     }
 

@@ -510,7 +510,13 @@ class FileAudioProvider {
     async _setupMic() {
         const _micId = adxDeviceSelector.getSelectedMicId();
         this._micStream = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, ...(_micId ? { deviceId: { exact: _micId } } : {}) },
+            audio: {
+                channelCount: 1,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                ...(_micId ? { deviceId: { exact: _micId } } : {}),
+            },
             video: false,
         });
 
@@ -1066,6 +1072,7 @@ async function startSession() {
                     session.sendChunk({
                         type: 'audio_chunk',
                         audio_base64: arrayBufferToBase64(chunk.audio.buffer),
+                        ai_playing: !!(session && session.audioPlayer && session.audioPlayer.playing),
                     });
                     if (sessionRecorder) sessionRecorder.pushLeft(chunk.audio);
                 };
@@ -1117,7 +1124,13 @@ async function startMicrophone() {
 
     const _micId = adxDeviceSelector.getSelectedMicId();
     audioStream = await navigator.mediaDevices.getUserMedia({
-        audio: _micId ? { deviceId: { exact: _micId } } : true,
+        audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            ...(_micId ? { deviceId: { exact: _micId } } : {}),
+        },
     });
     audioSource = audioCtxIn.createMediaStreamSource(audioStream);
 
@@ -1140,6 +1153,7 @@ async function startMicrophone() {
             session.sendChunk({
                 type: 'audio_chunk',
                 audio_base64: arrayBufferToBase64(chunk.buffer),
+                ai_playing: !!(session && session.audioPlayer && session.audioPlayer.playing),
             });
             if (sessionRecorder) sessionRecorder.pushLeft(chunk);
         }

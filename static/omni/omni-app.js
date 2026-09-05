@@ -307,9 +307,14 @@ class LiveMediaProvider extends MediaProvider {
         if (!this._videoStream) {
             await this._openVideoStream(this._useFront);
         }
-        const _omniMicId = omniDeviceSelector.getSelectedMicId();
         this._audioStream = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, ...(_omniMicId ? { deviceId: { exact: _omniMicId } } : {}) },
+            audio: {
+                channelCount: 1,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                ...(_omniMicId ? { deviceId: { exact: _omniMicId } } : {}),
+            },
             video: false,
         });
         this._audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE_IN });
@@ -600,7 +605,13 @@ class FileMediaProvider extends MediaProvider {
     async _setupMic() {
         const _omniMicId = omniDeviceSelector.getSelectedMicId();
         this._micStream = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, ...(_omniMicId ? { deviceId: { exact: _omniMicId } } : {}) },
+            audio: {
+                channelCount: 1,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                ...(_omniMicId ? { deviceId: { exact: _omniMicId } } : {}),
+            },
             video: false,
         });
 
@@ -1608,7 +1619,11 @@ async function startSession() {
             preparePayload,
             async () => {
                 media.onChunk = (chunk) => {
-                    const msg = { type: 'audio_chunk', audio_base64: arrayBufferToBase64(chunk.audio.buffer) };
+                    const msg = {
+                        type: 'audio_chunk',
+                        audio_base64: arrayBufferToBase64(chunk.audio.buffer),
+                        ai_playing: !!(session && session.audioPlayer && session.audioPlayer.playing),
+                    };
                     if (chunk.frameBase64) msg.frame_base64_list = [chunk.frameBase64];
                     const effectiveSlice = getEffectiveMaxSliceNums();
                     if (effectiveSlice > 1) msg.max_slice_nums = effectiveSlice;

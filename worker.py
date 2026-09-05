@@ -2182,6 +2182,7 @@ async def duplex_ws(ws: WebSocket):
     consecutive_silence_chunks = 0
     model_speaking = False
     model_speak_chunks = 0
+    barge_in_streak = 0
     from core.expert import ExpertSupervisor, ExpertConfig, ExpertProvider
     expert_supervisor = ExpertSupervisor()
     expert_task: Optional[asyncio.Task] = None
@@ -2247,7 +2248,7 @@ async def duplex_ws(ws: WebSocket):
                 pass
 
     async def _process_audio_chunk(msg: Dict[str, Any]) -> None:
-        nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks, expert_task, pending_expert_text
+        nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks, barge_in_streak, expert_task, pending_expert_text
         if worker.state.status == WorkerStatus.DUPLEX_PAUSED:
             await ws.send_json({"type": "error", "error": "Worker is paused"})
             return
@@ -2293,12 +2294,31 @@ async def duplex_ws(ws: WebSocket):
         SPEECH_ENERGY_THRESHOLD = 0.012
         SILENCE_ENERGY_THRESHOLD = 0.006
 
-        user_is_speaking = audio_rms >= SPEECH_ENERGY_THRESHOLD
-        user_is_silent = audio_rms <= SILENCE_ENERGY_THRESHOLD
+        client_ai_playing = bool(msg.get("ai_playing", False))
+        is_ai_speaking = model_speaking or client_ai_playing
 
-        if model_speaking and user_is_speaking:
-            # 用户在模型说话时插话 -> 触发打断 (Barge-in)!
-            logger.info(f"[Duplex] User barge-in interrupt (audio_rms={audio_rms:.4f})")
+        if is_ai_speaking:
+            # AI 正在发声（或客户端扬声器正在播放）：麦克风易拾取扬声器回声（RMS 通常在 0.015~0.06 波动）
+            # 为避免扬声器回声引发假打断恶性循环（False barge-in loop），需更高的瞬时能量 (>= 0.08) 或持续 2 个 chunk 以上的显著语音能量 (>= 0.035)
+            if audio_rms >= 0.08:
+                barge_in_streak += 1
+            elif audio_rms >= 0.035:
+                barge_in_streak += 1
+            else:
+                barge_in_streak = 0
+
+            is_barge_in = (audio_rms >= 0.08) or (barge_in_streak >= 2 and audio_rms >= 0.035)
+            user_is_speaking = is_barge_in
+            user_is_silent = audio_rms <= SILENCE_ENERGY_THRESHOLD and not is_barge_in
+        else:
+            barge_in_streak = 0
+            user_is_speaking = audio_rms >= SPEECH_ENERGY_THRESHOLD
+            user_is_silent = audio_rms <= SILENCE_ENERGY_THRESHOLD
+
+        if is_ai_speaking and user_is_speaking:
+            # 用户在模型/扬声器发声时打断 -> 触发真实打断 (Barge-in)!
+            logger.info(f"[Duplex] User barge-in interrupt (audio_rms={audio_rms:.4f}, streak={barge_in_streak})")
+            barge_in_streak = 0
             pending_expert_text = None
             if expert_task and not expert_task.done():
                 expert_task.cancel()
@@ -2349,24 +2369,24 @@ async def duplex_ws(ws: WebSocket):
                 lps = 1.0
                 sps = 1.0
         elif model_speaking:
-            # 模型正在发言
+            # 模型正在发言：各 400ms chunk 逐步引导自然表达和适时收尾
             model_speak_chunks += 1
-            if model_speak_chunks <= 4:
-                # 0-1.6 秒：完全自然生成
+            if model_speak_chunks <= 25:
+                # 0-10 秒：完全自然生成，让模型完整表达观点，避免中途腰斩
                 lps = 1.0
                 sps = 1.0
-            elif model_speak_chunks <= 7:
-                # 1.6-2.8 秒：适度引导收尾（1-2句话）
-                lps = 1.4
+            elif model_speak_chunks <= 50:
+                # 10-20 秒：温和偏向收尾
+                lps = 1.15
+                sps = 0.95
+            elif model_speak_chunks <= 75:
+                # 20-30 秒：适度引导收尾
+                lps = 1.3
                 sps = 0.8
-            elif model_speak_chunks <= 10:
-                # 2.8-4.0 秒：强力引导收尾
-                lps = 2.2
-                sps = 0.3
             else:
-                # > 4.0 秒：坚决刹车切回监听，防止跑火车
-                lps = 3.5
-                sps = 0.05
+                # > 30 秒：渐进刹车切回监听，防止跑火车
+                lps = 1.8
+                sps = 0.5
         elif chunk_force_listen:
             lps = 2.5
             sps = 0.1

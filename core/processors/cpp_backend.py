@@ -1419,7 +1419,7 @@ class CppBackendWorker:
 
         all_files = os.listdir(tts_wav_dir)
         if all_files:
-            logger.info(f"[WAV nowait] dir={tts_wav_dir}, all_files={sorted(all_files)[:10]}, sent={len(self._sent_wav_files)}")
+            logger.debug(f"[WAV nowait] dir={tts_wav_dir}, all_files={sorted(all_files)[:10]}, sent={len(self._sent_wav_files)}")
 
         wav_files = sorted(
             [f for f in os.listdir(tts_wav_dir) if f.startswith("wav_") and f.endswith(".wav")],

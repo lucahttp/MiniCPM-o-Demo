@@ -350,6 +350,36 @@ export class DuplexSession {
         this.serverPauseConfirmed = false;
         this.forceListenActive = false;
         this._queueReject = null;
+        if (this._turnEndCheckTimer) {
+            clearTimeout(this._turnEndCheckTimer);
+            this._turnEndCheckTimer = null;
+        }
+    }
+
+    _scheduleTurnEndIfAudioFinished() {
+        if (this._turnEndCheckTimer) return;
+        const check = () => {
+            this._turnEndCheckTimer = null;
+            const ap = this.audioPlayer;
+            const curTime = ap && ap.ctx ? ap.ctx.currentTime : 0;
+            const hasAudioPlaying = ap && (ap.playing || (ap.nextTime > curTime + 0.05));
+            if (hasAudioPlaying) {
+                // 音频仍在播放或还有未播完的 buffer，继续轮询等待
+                this._turnEndCheckTimer = setTimeout(check, 100);
+                return;
+            }
+            // 音频已真正播放完毕，自然结束 turn 并 finalize 界面气泡
+            if (this._speakHandle) {
+                this.onSpeakEnd();
+                this._speakHandle = null;
+                this.currentSpeakText = '';
+                this.onSystemLog('— end of turn —');
+            }
+            if (ap && ap.turnActive) {
+                ap.endTurn();
+            }
+        };
+        this._turnEndCheckTimer = setTimeout(check, 100);
     }
 
     _handleMessage(msg) {
@@ -357,6 +387,10 @@ export class DuplexSession {
             case 'result': this._handleResult(msg); break;
             case 'audio_only':
                 if (msg.audio_data) {
+                    if (this._turnEndCheckTimer) {
+                        clearTimeout(this._turnEndCheckTimer);
+                        this._turnEndCheckTimer = null;
+                    }
                     if (!this.audioPlayer.turnActive) this.audioPlayer.beginTurn();
                     this.audioPlayer.playChunk(msg.audio_data, performance.now());
                 }
@@ -376,7 +410,16 @@ export class DuplexSession {
                 this.onSystemLog('Session resumed');
                 break;
             case 'interrupted':
+                if (this._turnEndCheckTimer) {
+                    clearTimeout(this._turnEndCheckTimer);
+                    this._turnEndCheckTimer = null;
+                }
                 this.audioPlayer.stopAll();
+                if (this._speakHandle) {
+                    this.onSpeakEnd();
+                    this._speakHandle = null;
+                    this.currentSpeakText = '';
+                }
                 this.onSystemLog('Interrupted by user speech');
                 break;
             case 'expert_status':
@@ -435,12 +478,18 @@ export class DuplexSession {
         // LISTEN→SPEAK flush 出的 320ms 尾音 wav 紧跟 1000ms 主体时最明显）。
         // 真正的 turn 结束信号只有 is_listen=true（__IS_LISTEN__）。
         if (!result.is_listen) {
+            if (this._turnEndCheckTimer) {
+                clearTimeout(this._turnEndCheckTimer);
+                this._turnEndCheckTimer = null;
+            }
             if (result.audio_data) {
                 if (!this.audioPlayer.turnActive) this.audioPlayer.beginTurn();
                 this.audioPlayer.playChunk(result.audio_data, recvTime);
             }
         } else {
-            if (this.audioPlayer.turnActive) this.audioPlayer.endTurn();
+            // 切到 listen 状态：如果音频仍在播放或有未完成的 chunks，等待播放真正结束后再结束 turn，
+            // 避免 C++ Token2Wav 异步生成的后续 audio_only chunks 被误判为新 turn。
+            this._scheduleTurnEndIfAudioFinished();
         }
 
         // Compute drift
@@ -462,7 +511,7 @@ export class DuplexSession {
         if (curKv !== undefined && curKv > 0) {
             // (1) Hit the user-configured ceiling.
             if (curKv >= maxKv) {
-                this.onSystemLog(`\u26a0 KV cache (${curKv.toLocaleString()}) reached limit. Auto-stopping.`);
+                this.onSystemLog(`⚠️ KV cache (${curKv.toLocaleString()}) reached limit. Auto-stopping.`);
                 setTimeout(() => this.stop(), 0);
             }
             // (2) Sliding-window pruning detected (KV length dropped between turns).
@@ -470,9 +519,9 @@ export class DuplexSession {
             //     may never be hit. Detect a shrink as a proxy and optionally stop.
             else if (this._lastKvCacheLength > 0 && curKv < this._lastKvCacheLength) {
                 const prev = this._lastKvCacheLength;
-                this.onSystemLog(`\u2702 KV cache pruned (sliding window): ${prev.toLocaleString()} \u2192 ${curKv.toLocaleString()}.`);
+                this.onSystemLog(`✂ KV cache pruned (sliding window): ${prev.toLocaleString()} → ${curKv.toLocaleString()}.`);
                 if (this.config.getStopOnSlidingWindow()) {
-                    this.onSystemLog('\u26a0 Stop-on-sliding-window enabled. Auto-stopping.');
+                    this.onSystemLog('⚠️ Stop-on-sliding-window enabled. Auto-stopping.');
                     setTimeout(() => this.stop(), 0);
                 }
             }
@@ -507,6 +556,10 @@ export class DuplexSession {
             // 所以不能用 end_of_turn 触发气泡 finalize——否则每次 decode 都分块显示。
             // 真正的 turn 切换信号是 is_listen=true（__IS_LISTEN__）。
             if (result.text) {
+                if (this._turnEndCheckTimer) {
+                    clearTimeout(this._turnEndCheckTimer);
+                    this._turnEndCheckTimer = null;
+                }
                 this.currentSpeakText += result.text;
                 if (!this._speakHandle) {
                     this._speakHandle = this.onSpeakStart(this.currentSpeakText);
@@ -516,8 +569,12 @@ export class DuplexSession {
             }
 
             if (result.is_listen) {
-                // 切到 listen：finalize 当前 speak bubble（如果有），再通知 listen
-                if (this._speakHandle) {
+                // 切到 listen：如果当前没有任何音频在播放，立即 finalize；
+                // 否则由 _scheduleTurnEndIfAudioFinished 在音频播完后自然 finalize，保证声文同步。
+                const ap = this.audioPlayer;
+                const curTime = ap && ap.ctx ? ap.ctx.currentTime : 0;
+                const hasAudioPlaying = ap && (ap.playing || (ap.nextTime > curTime + 0.05));
+                if (!hasAudioPlaying && this._speakHandle) {
                     this.onSpeakEnd();
                     this._speakHandle = null;
                     this.currentSpeakText = '';
