@@ -14,14 +14,26 @@ from .providers.openai_provider import OpenAIExpertProvider
 
 logger = logging.getLogger(__name__)
 
-# Trigger keywords for delegation
+# Trigger keywords for delegation (Spanish and English)
 _EXPLICIT_TRIGGERS = [
+    # Spanish triggers
     r"\b(preg[uú]ntale?\s+a\s+(agy|claude|minimax|experto))\b",
     r"\b(consult[aá](le)?\s+al?\s+(agy|claude|minimax|experto))\b",
     r"\b(experto|supervisor)\b",
     r"\b(busca\s+(en\s+internet|info|informaci[oó]n|datos))\b",
     r"\b(investig[aá]|averigua|analiz[aá]|expl[ií]came|desarrolla|programa|c[oó]digo)\b",
     r"\b(cu[aá]nto\s+es|calcul[aá]|resuelve)\b",
+    r"\b(d[eé]jame\s+(consultar|averiguar|buscar|investigar|preguntar))\b",
+
+    # English triggers
+    r"\b(expert|supervisor)\b",
+    r"\b(look\s*(up|into))\b",
+    r"\b(search(\s+(for|online|the\s+web|the\s+internet))?)\b",
+    r"\b(research|investigate|find\s+out)\b",
+    r"\b(ask\s+(the\s+)?(expert|supervisor|agy|claude|minimax))\b",
+    r"\b(consult\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax))\b",
+    r"\b(let\s+me\s+(look\s*up|check|search|investigate|find\s+out|research|consult|ask))\b",
+    r"\b(check\s+(with\s+)?(the\s+expert|online|the\s+web))\b",
 ]
 
 _DELEGATE_TAG_REGEX = re.compile(r"\[(?:DELEGATE|EXPERT):\s*(.*?)\]", re.IGNORECASE)
@@ -91,7 +103,8 @@ class ExpertSupervisor:
 
         for pattern in _EXPLICIT_TRIGGERS:
             if re.search(pattern, clean):
-                return True, text.strip(), provider_override
+                q = self.clean_query_text(text)
+                return True, q, provider_override
 
         # 3. If auto_delegate is enabled and query is substantive (> 30 chars and contains question marks or inquiry)
         if self.config.auto_delegate:
@@ -99,9 +112,28 @@ class ExpertSupervisor:
             is_longer = len(clean.split()) >= 4
             is_not_small_talk = not any(w in clean for w in ["hola", "buen dia", "buenas", "chau", "adios", "gracias", "ok", "dale", "si", "no"])
             if is_question and is_longer and is_not_small_talk:
-                return True, text.strip(), provider_override
+                q = self.clean_query_text(text)
+                return True, q, provider_override
 
         return False, None, None
+
+    @staticmethod
+    def clean_query_text(text: str) -> str:
+        """Strip introductory conversational phrases so the expert gets a clean prompt."""
+        q = text.strip()
+        q = re.sub(r"^(sure|ok|okay|yes|yeah|claro|por supuesto|seguro|bien)[,\s]+", "", q, flags=re.IGNORECASE)
+        q = re.sub(
+            r"^(let\s+me\s+(look\s*up|check|search|investigate|find\s+out|research|consult|ask)|"
+            r"i('ll|\s+will)\s+(look\s*up|check|search|investigate|find\s+out)|"
+            r"d[eé]jame\s+(consultar|averiguar|buscar|investigar|preguntar)|"
+            r"voy\s+a\s+(consultar|averiguar|buscar|investigar|preguntar))\s+(about\s+|sobre\s+|para\s+)?",
+            "",
+            q,
+            flags=re.IGNORECASE
+        )
+        q = re.sub(r"\b(with\s+(the\s+)?expert|al?\s+experto)\b", "", q, flags=re.IGNORECASE).strip()
+        q = q.strip(".,;:?! ")
+        return q or text.strip()
 
     def get_filler_phrase(self, lang: str = "es") -> str:
         """Returns a fast, natural filler phrase to speak while expert processes."""

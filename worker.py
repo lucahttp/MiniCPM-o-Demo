@@ -2602,6 +2602,16 @@ async def duplex_ws(ws: WebSocket):
                     except Exception as e:
                         logger.warning(f"[Duplex] Failed to configure expert supervisor: {e}")
 
+                if expert_supervisor and expert_supervisor.is_enabled():
+                    expert_guide = (
+                        " You have access to a specialized background research expert. "
+                        "When asked to research, look something up, search the web, or consult the expert, "
+                        "briefly acknowledge that you will check with the expert (e.g. 'Sure, let me look that up with the expert' "
+                        "or 'Déjame consultar al experto') so the expert can handle it."
+                    )
+                    if expert_guide.strip() not in system_prompt:
+                        system_prompt = system_prompt.rstrip() + expert_guide
+
                 # LLM ref audio → ref_audio_path（嵌入 system prompt）
                 # TTS ref audio → prompt_wav_path（初始化 vocoder）
                 # 两者可以不同，也可以相同（向后兼容：不提供 tts_ref_audio_base64 时复用 ref_audio_base64）
