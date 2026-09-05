@@ -303,8 +303,13 @@ function handleExpertStatus(msg) {
         el.innerHTML = `
             <div class="conv-icon">&#x1F9E0;</div>
             <div class="conv-text">
-                <span class="speaker expert-tag" style="background:#6366f1;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-right:6px;">${escapeHtml(prov)}</span>
-                <span class="expert-status-text" style="color:#6366f1;font-style:italic;">Consultando al experto... "${escapeHtml(msg.query || '')}"</span>
+                <div class="expert-header">
+                    <span class="speaker expert-tag">${escapeHtml(prov)}</span>
+                    <span class="expert-status-label">Consultando experto</span>
+                    <span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
+                </div>
+                ${msg.filler ? `<div class="expert-filler">&#x1F5E3;&#xFE0F; <em>"${escapeHtml(msg.filler)}"</em></div>` : ''}
+                <div class="expert-query">&#x1F50D; ${escapeHtml(msg.query || '')}</div>
             </div>
         `;
         chatLog.appendChild(el);
@@ -312,32 +317,24 @@ function handleExpertStatus(msg) {
         currentExpertCard = el;
     } else if (msg.status === 'done') {
         const text = msg.text || '';
-        const elapsed = msg.elapsed_ms ? ` (${(msg.elapsed_ms / 1000).toFixed(1)}s)` : '';
-        if (currentExpertCard) {
-            currentExpertCard.className = 'conv-entry expert done';
-            currentExpertCard.innerHTML = `
-                <div class="conv-icon">&#x1F4A1;</div>
-                <div class="conv-text">
-                    <span class="speaker expert-tag" style="background:#10b981;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-right:6px;">${escapeHtml(prov)}</span>
-                    <span style="font-size:10px;color:#888;">${elapsed}</span>
-                    <div class="expert-content" style="margin-top:4px;color:#1e293b;line-height:1.4;">${escapeHtml(text)}</div>
+        const elapsed = msg.elapsed_ms ? `${(msg.elapsed_ms / 1000).toFixed(1)}s` : '';
+        const card = currentExpertCard || document.createElement('div');
+        card.className = 'conv-entry expert done';
+        card.innerHTML = `
+            <div class="conv-icon">&#x1F4A1;</div>
+            <div class="conv-text">
+                <div class="expert-header">
+                    <span class="speaker expert-tag done">${escapeHtml(prov)}</span>
+                    ${elapsed ? `<span class="expert-elapsed">&#x23F1;&#xFE0F; ${elapsed}</span>` : ''}
                 </div>
-            `;
-            currentExpertCard = null;
-        } else {
+                <div class="expert-content">${escapeHtml(text)}</div>
+            </div>
+        `;
+        if (!currentExpertCard) {
             document.getElementById('chatEmpty').style.display = 'none';
-            const el = document.createElement('div');
-            el.className = 'conv-entry expert done';
-            el.innerHTML = `
-                <div class="conv-icon">&#x1F4A1;</div>
-                <div class="conv-text">
-                    <span class="speaker expert-tag" style="background:#10b981;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-right:6px;">${escapeHtml(prov)}</span>
-                    <span style="font-size:10px;color:#888;">${elapsed}</span>
-                    <div class="expert-content" style="margin-top:4px;color:#1e293b;line-height:1.4;">${escapeHtml(text)}</div>
-                </div>
-            `;
-            chatLog.appendChild(el);
+            chatLog.appendChild(card);
         }
+        currentExpertCard = null;
         scrollChatLog();
 
         // Note: Audio is voiced directly through MiniCPM-o full-duplex stream
@@ -350,8 +347,10 @@ function handleExpertStatus(msg) {
             currentExpertCard.innerHTML = `
                 <div class="conv-icon">&#x23F9;</div>
                 <div class="conv-text">
-                    <span class="speaker expert-tag" style="background:#94a3b8;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-right:6px;">${escapeHtml(prov)}</span>
-                    <span style="color:#94a3b8;font-size:11px;font-style:italic;">Consulta al experto cancelada por interrupción</span>
+                    <div class="expert-header">
+                        <span class="speaker expert-tag muted">${escapeHtml(prov)}</span>
+                        <span class="expert-status-label muted">Interrumpido</span>
+                    </div>
                 </div>
             `;
             currentExpertCard = null;
@@ -363,8 +362,11 @@ function handleExpertStatus(msg) {
             currentExpertCard.innerHTML = `
                 <div class="conv-icon">&#x26A0;</div>
                 <div class="conv-text">
-                    <span class="speaker expert-tag" style="background:#ef4444;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-right:6px;">${escapeHtml(prov)}</span>
-                    <span style="color:#ef4444;font-size:11px;">Error en experto: ${escapeHtml(msg.error || '')}</span>
+                    <div class="expert-header">
+                        <span class="speaker expert-tag error">${escapeHtml(prov)}</span>
+                        <span class="expert-status-label error">Error</span>
+                    </div>
+                    <div class="expert-error-msg">${escapeHtml(msg.error || 'Error desconocido')}</div>
                 </div>
             `;
             currentExpertCard = null;

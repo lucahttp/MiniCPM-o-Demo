@@ -2204,14 +2204,24 @@ async def duplex_ws(ws: WebSocket):
             pass
 
     async def _run_expert(query_text: str, prov_override: Optional[str] = None):
-        nonlocal pending_expert_text, session_dialog_history
+        nonlocal pending_expert_text, session_dialog_history, turn_has_injected_expert
         target_prov = prov_override or expert_supervisor.config.provider.value
         try:
+            # Elegir frase de relleno ("let me think...", "im doing some research...") según el idioma
+            is_es = any(c in query_text.lower() for c in ["¿", "á", "é", "í", "ó", "ú", "ñ", "que", "como", "sobre", "cual", "cuanto", "por que"])
+            filler_phrase = expert_supervisor.get_filler_phrase(lang="es" if is_es else "en")
+
+            # Inyectar de inmediato para que MiniCPM-o comience a vocalizar el pensamiento / investigación
+            pending_expert_text = filler_phrase
+            turn_has_injected_expert = True
+            logger.info(f"[Duplex] Injected thinking filler: '{filler_phrase}'")
+
             await ws.send_json({
                 "type": "expert_status",
                 "status": "thinking",
                 "query": query_text,
                 "provider": target_prov,
+                "filler": filler_phrase,
             })
             # Pasar los últimos 6 turnos para mantener contexto semántico y memoria
             context_history = session_dialog_history[-6:] if session_dialog_history else None
@@ -2222,6 +2232,7 @@ async def duplex_ws(ws: WebSocket):
             )
             if expert_res.get("success"):
                 pending_expert_text = expert_res["text"]
+                turn_has_injected_expert = True
                 session_dialog_history.append({"role": "user", "content": query_text})
                 session_dialog_history.append({"role": "assistant", "content": expert_res["text"]})
                 await ws.send_json({
@@ -2451,8 +2462,9 @@ async def duplex_ws(ws: WebSocket):
                         if len(session_dialog_history) > 20:
                             session_dialog_history = session_dialog_history[-20:]
 
-                    # 如果本轮发言包含了 Expert 的注入文本，坚决不再触发二次委托（防止递归死循环）
-                    if expert_supervisor.is_enabled() and not turn_has_injected_expert:
+                    # Si esta locución fue una inyección del experto/filler, o si ya hay un experto corriendo, no delegar
+                    is_expert_running = expert_task and not expert_task.done()
+                    if expert_supervisor.is_enabled() and not turn_has_injected_expert and not is_expert_running:
                         # 1. Verificar si hay Tool rápida local (< 50ms) o tag [EXPERT: ...]
                         tool_type, tool_target, tool_args = expert_supervisor.detect_tool_or_expert(turn_text)
                         if tool_type == "TOOL":

@@ -325,36 +325,7 @@ body {
     }
 }
 
-/* ========== Expert Supervisor Styles ========== */
-.conv-entry.expert {
-    border-left: 3px solid #6366f1;
-    background: #f8fafc;
-    border-radius: 6px;
-    padding: 8px 10px;
-    margin: 4px 0;
-}
-.conv-entry.expert.thinking {
-    border-left-color: #6366f1;
-    background: #f5f3ff;
-    animation: expert-pulse 1.8s infinite ease-in-out;
-}
-.conv-entry.expert.done {
-    border-left-color: #10b981;
-    background: #f0fdf4;
-}
-.conv-entry.expert.cancelled {
-    border-left-color: #94a3b8;
-    background: #f8fafc;
-    opacity: 0.8;
-}
-.conv-entry.expert.error {
-    border-left-color: #ef4444;
-    background: #fef2f2;
-}
-@keyframes expert-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.55; }
-}
+/* ========== Expert Supervisor Focus Styles ========== */
 .panel-expert-ask input:focus {
     outline: none;
     border-color: #6366f1;

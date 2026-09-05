@@ -53,19 +53,19 @@ class ExpertConfig(BaseModel):
     # Conversational fillers while waiting for expert
     fillers_es: List[str] = Field(
         default=[
-            "Déjame consultar eso con el experto...",
-            "Dame un segundo, ya te lo averiguo...",
-            "Un momento, estoy consultando esa información...",
-            "Déjame pensar en eso...",
-            "Estoy revisando los datos para ti...",
+            "Déjame pensar... mmm...",
+            "Estoy investigando sobre eso... mmm...",
+            "A ver, déjame consultar los detalles... mmm...",
+            "Dame un segundo, ya te lo averiguo... mmm...",
+            "Déjame ver... mmm...",
         ]
     )
     fillers_en: List[str] = Field(
         default=[
-            "Let me check that with the expert...",
-            "Give me a second, looking that up for you...",
-            "One moment, checking that information now...",
-            "Let me look into that...",
-            "Consulting the knowledge base, just a moment...",
+            "Let me think... mmm...",
+            "I'm doing some research about that... mmm...",
+            "Let me look into that for you... mmm...",
+            "Give me a moment, checking that... mmm...",
+            "Let me see... mmm...",
         ]
     )

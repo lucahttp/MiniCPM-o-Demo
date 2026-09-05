@@ -1030,12 +1030,15 @@ function _fsPushAiMsg(text) {
     return textSpan;
 }
 
+let currentExpertCard = null;
+
 function clearConversation() {
     conversationLog.innerHTML = '';
     convEmpty.style.display = 'flex';
     conversationLog.appendChild(convEmpty);
     fsChatInner.innerHTML = '';
     _fsSpeakEl = null; _fsSpeakMsgEl = null;
+    currentExpertCard = null;
 }
 
 function addSystemEntry(text) {
@@ -1064,6 +1067,86 @@ function addSpeakEntry(text) {
 
 function updateFsSpeakText(text) { if (_fsSpeakEl) _fsSpeakEl.textContent = text; }
 function finishFsSpeak() { _fsSpeakEl = null; _fsSpeakMsgEl = null; }
+
+function handleExpertStatus(msg) {
+    const prov = (msg.provider || 'Expert').toUpperCase();
+    if (msg.status === 'thinking') {
+        convEmpty.style.display = 'none';
+        const el = document.createElement('div');
+        el.className = 'conv-entry expert thinking';
+        el.innerHTML = `
+            <div class="conv-icon">&#x1F9E0;</div>
+            <div class="conv-text">
+                <div class="expert-header">
+                    <span class="speaker expert-tag">${escapeHtml(prov)}</span>
+                    <span class="expert-status-label">Consultando experto</span>
+                    <span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
+                </div>
+                ${msg.filler ? `<div class="expert-filler">&#x1F5E3;&#xFE0F; <em>"${escapeHtml(msg.filler)}"</em></div>` : ''}
+                <div class="expert-query">&#x1F50D; ${escapeHtml(msg.query || '')}</div>
+            </div>
+        `;
+        conversationLog.appendChild(el);
+        conversationLog.scrollTop = conversationLog.scrollHeight;
+        currentExpertCard = el;
+    } else if (msg.status === 'done') {
+        const text = msg.text || '';
+        const elapsed = msg.elapsed_ms ? `${(msg.elapsed_ms / 1000).toFixed(1)}s` : '';
+        const card = currentExpertCard || document.createElement('div');
+        card.className = 'conv-entry expert done';
+        card.innerHTML = `
+            <div class="conv-icon">&#x1F4A1;</div>
+            <div class="conv-text">
+                <div class="expert-header">
+                    <span class="speaker expert-tag done">${escapeHtml(prov)}</span>
+                    ${elapsed ? `<span class="expert-elapsed">&#x23F1;&#xFE0F; ${elapsed}</span>` : ''}
+                </div>
+                <div class="expert-content">${escapeHtml(text)}</div>
+            </div>
+        `;
+        if (!currentExpertCard) {
+            convEmpty.style.display = 'none';
+            conversationLog.appendChild(card);
+        }
+        currentExpertCard = null;
+        conversationLog.scrollTop = conversationLog.scrollHeight;
+
+        if (window.speechSynthesis) {
+            try { window.speechSynthesis.cancel(); } catch (_) {}
+        }
+    } else if (msg.status === 'cancelled') {
+        if (currentExpertCard) {
+            currentExpertCard.className = 'conv-entry expert cancelled';
+            currentExpertCard.innerHTML = `
+                <div class="conv-icon">&#x23F9;</div>
+                <div class="conv-text">
+                    <div class="expert-header">
+                        <span class="speaker expert-tag muted">${escapeHtml(prov)}</span>
+                        <span class="expert-status-label muted">Interrumpido</span>
+                    </div>
+                </div>
+            `;
+            currentExpertCard = null;
+            conversationLog.scrollTop = conversationLog.scrollHeight;
+        }
+    } else if (msg.status === 'error') {
+        if (currentExpertCard) {
+            currentExpertCard.className = 'conv-entry expert error';
+            currentExpertCard.innerHTML = `
+                <div class="conv-icon">&#x26A0;</div>
+                <div class="conv-text">
+                    <div class="expert-header">
+                        <span class="speaker expert-tag error">${escapeHtml(prov)}</span>
+                        <span class="expert-status-label error">Error</span>
+                    </div>
+                    <div class="expert-error-msg">${escapeHtml(msg.error || 'Error desconocido')}</div>
+                </div>
+            `;
+            currentExpertCard = null;
+            conversationLog.scrollTop = conversationLog.scrollHeight;
+        }
+    }
+}
 
 function updateTimeBadge(chunks) {
     const m = Math.floor(chunks / 60);
@@ -1485,6 +1568,7 @@ async function startSession() {
         finishFsSpeak();
         if (sessionRecorder) sessionRecorder.finalizeSubtitle();
     };
+    session.onExpertStatus = (msg) => handleExpertStatus(msg);
     session.onQueueUpdate = (data) => {
         const lamp = document.getElementById('statusLamp');
         if (data) {
