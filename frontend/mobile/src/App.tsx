@@ -196,18 +196,18 @@ const DEFAULT_SETTINGS: SettingsState = {
   turnbased: {
     presetId: null,
     systemPrompt:
-      '你的任务是作为一个助手认真、高质量地回复用户的问题。请用高自然度的方式和用户聊天。',
+      '你的任务是作为一个助手认真、高质量地回复用户的问题。如果用户要求进行计算或提供的信息不完整，请主动提出简短的澄清问题（如：“你想让我计算净工资还是转换成美元？”），不要只回答“Okay”或“Of course”。',
     refAudio: EMPTY_REF_AUDIO,
   },
   audio_duplex: {
     presetId: null,
     systemPrompt:
-      '请作为一个自然、口语化的语音助手与用户实时对话。你处于音频双工模式，可以一边听一边说。',
+      '请作为一个自然、口语化的语音助手与用户实时对话。如果用户要求进行计算或提供的信息不完整，请主动提出简短的澄清问题（如：“你想让我计算净工资还是转换成美元？”），不要只回答“Okay”或“Of course”。',
     refAudio: EMPTY_REF_AUDIO,
   },
   omni: {
     presetId: null,
-    systemPrompt: 'Streaming Omni Conversation.',
+    systemPrompt: 'Streaming Omni Conversation. If the user asks for a calculation or provides incomplete info, ask a concise clarifying question. Do not just say "Okay" or "Of course".',
     refAudio: EMPTY_REF_AUDIO,
   },
   maxNewTokens: 256,

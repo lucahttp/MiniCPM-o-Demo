@@ -57,8 +57,13 @@ let audioSource = null;
 let analyserNode = null;
 let waveformRunning = false;
 
-// Session recording
+// Session recording & Timeline
 let sessionRecorder = null;
+let currentTimelineTaskId = null;
+let lastUserTimelineSample = 0;
+const interactionTimeline = document.getElementById('interactionTimeline');
+const timelineWrapper = document.getElementById('timelineWrapper');
+const toggleTimelineBtn = document.getElementById('toggleTimelineBtn');
 
 // 排队倒计时（使用共享 CountdownTimer 模块）
 import { CountdownTimer } from '../lib/countdown-timer.js';
@@ -253,6 +258,20 @@ function drawWaveform() {
     for (let gy = 0; gy < h; gy += h / 4) {
         ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
     }
+
+    if (interactionTimeline && interactionTimeline.isRunning) {
+        const now = performance.now();
+        if (now - lastUserTimelineSample > 35) {
+            lastUserTimelineSample = now;
+            let sumSq = 0;
+            for (let i = 0; i < bufLen; i += 4) {
+                const norm = (data[i] - 128) / 128.0;
+                sumSq += norm * norm;
+            }
+            const rms = Math.sqrt(sumSq / (bufLen / 4));
+            interactionTimeline.addUserAudio(Math.min(1.0, rms * 4.5));
+        }
+    }
 }
 
 window.addEventListener('resize', () => { if (!waveformRunning) drawIdleWaveform(); });
@@ -297,6 +316,10 @@ let currentExpertCard = null;
 function handleExpertStatus(msg) {
     const prov = (msg.provider || 'Expert').toUpperCase();
     if (msg.status === 'thinking') {
+        if (interactionTimeline && interactionTimeline.isRunning) {
+            const taskName = msg.query ? (msg.query.length > 20 ? msg.query.slice(0, 20) + '…' : msg.query) : prov;
+            currentTimelineTaskId = interactionTimeline.startExpertTask(taskName);
+        }
         document.getElementById('chatEmpty').style.display = 'none';
         const el = document.createElement('div');
         el.className = 'conv-entry expert thinking';
@@ -316,6 +339,10 @@ function handleExpertStatus(msg) {
         scrollChatLog();
         currentExpertCard = el;
     } else if (msg.status === 'done') {
+        if (interactionTimeline && currentTimelineTaskId) {
+            interactionTimeline.endExpertTask(currentTimelineTaskId, true);
+            currentTimelineTaskId = null;
+        }
         const text = msg.text || '';
         const elapsed = msg.elapsed_ms ? `${(msg.elapsed_ms / 1000).toFixed(1)}s` : '';
         const card = currentExpertCard || document.createElement('div');
@@ -342,6 +369,10 @@ function handleExpertStatus(msg) {
             try { window.speechSynthesis.cancel(); } catch (_) {}
         }
     } else if (msg.status === 'cancelled') {
+        if (interactionTimeline && currentTimelineTaskId) {
+            interactionTimeline.endExpertTask(currentTimelineTaskId, false);
+            currentTimelineTaskId = null;
+        }
         if (currentExpertCard) {
             currentExpertCard.className = 'conv-entry expert cancelled';
             currentExpertCard.innerHTML = `
@@ -357,6 +388,10 @@ function handleExpertStatus(msg) {
             scrollChatLog();
         }
     } else if (msg.status === 'error') {
+        if (interactionTimeline && currentTimelineTaskId) {
+            interactionTimeline.endExpertTask(currentTimelineTaskId, false);
+            currentTimelineTaskId = null;
+        }
         if (currentExpertCard) {
             currentExpertCard.className = 'conv-entry expert error';
             currentExpertCard.innerHTML = `
@@ -999,6 +1034,9 @@ async function startSession() {
         _queuePhase = null;
         setQueueButtonStates(null);
         setStatusLamp('stopped');
+        // Stop interaction timeline
+        if (interactionTimeline) interactionTimeline.stop();
+        currentTimelineTaskId = null;
         // Finalize recording
         if (sessionRecorder && sessionRecorder.recording) {
             const result = sessionRecorder.stop();
@@ -1059,12 +1097,20 @@ async function startSession() {
     if (refBase64) preparePayload.ref_audio_base64 = refBase64;
 
     try {
-        // Wire AI audio recording hook
-        if (sessionRecorder) {
-            session.audioPlayer.onRawAudio = (samples, sr, ts) => {
-                if (sessionRecorder) sessionRecorder.pushRight(samples, sr, ts);
-            };
-        }
+        // Wire AI audio recording + timeline hook (always, for timeline RMS even without recording)
+        session.audioPlayer.onRawAudio = (samples, sr, ts) => {
+            if (sessionRecorder) sessionRecorder.pushRight(samples, sr, ts);
+            // Feed AI waveform RMS to timeline
+            if (interactionTimeline && interactionTimeline.isRunning) {
+                let sumSq = 0;
+                const step = Math.max(1, (samples.length / 64) | 0);
+                for (let i = 0; i < samples.length; i += step) {
+                    sumSq += samples[i] * samples[i];
+                }
+                const rms = Math.sqrt(sumSq / (samples.length / step));
+                interactionTimeline.addAiAudio(Math.min(1.0, rms * 4.5));
+            }
+        };
 
         await session.start(
             document.getElementById('systemPrompt').value,
@@ -1095,6 +1141,12 @@ async function startSession() {
         metricsPanel.update({ type: 'state', sessionState: 'Active' });
         setStatusLamp('live');
         addSystemLog('Session active — speak now');
+
+        // Start interaction timeline
+        if (interactionTimeline) {
+            interactionTimeline.start();
+            if (timelineWrapper) timelineWrapper.style.display = '';
+        }
 
         if (_saveShareUI && session.recordingSessionId) _saveShareUI.setSessionId(session.recordingSessionId);
     } catch (e) {
@@ -1246,6 +1298,13 @@ expertQuickInput?.addEventListener('keydown', (e) => {
         e.preventDefault();
         submitExpertQuery();
     }
+});
+
+// Timeline toggle
+if (timelineWrapper) timelineWrapper.style.display = 'none'; // hidden until session starts
+toggleTimelineBtn?.addEventListener('click', () => {
+    if (!timelineWrapper) return;
+    timelineWrapper.style.display = timelineWrapper.style.display === 'none' ? '' : 'none';
 });
 
 // Cleanup on page unload (release mic, WS, AudioContext)

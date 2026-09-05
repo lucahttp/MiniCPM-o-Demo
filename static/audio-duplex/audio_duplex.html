@@ -203,9 +203,16 @@
 
     <!-- Dialog -->
     <div class="panel-dialog">
-        <div class="conv-header">
+        <div class="conv-header" style="display:flex;justify-content:space-between;align-items:center;">
             <span>Conversation</span>
-            <span id="chatSessionInfo" style="font-size:11px;color:#999;font-weight:400;">—</span>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span id="chatSessionInfo" style="font-size:11px;color:#999;font-weight:400;">—</span>
+                <button id="toggleTimelineBtn" style="font-size:10px;padding:2px 6px;border-radius:4px;border:1px solid #cbd5e1;background:#f8fafc;cursor:pointer;color:#64748b;" title="Mostrar/ocultar cronograma de interacción">📊 Cronograma</button>
+            </div>
+        </div>
+        <!-- GPT-Live Delegated Reasoning Timeline -->
+        <div class="timeline-wrapper" id="timelineWrapper" style="margin:6px 8px;border-radius:8px;overflow:hidden;border:1px solid #334155;background:#0f172a;box-shadow:0 2px 6px rgba(0,0,0,0.2);">
+            <gpt-timeline id="interactionTimeline" style="height:150px;display:block;"></gpt-timeline>
         </div>
         <div class="conv-log" id="chatLog">
             <div class="conv-empty" id="chatEmpty">Start a session to begin real-time voice conversation</div>
@@ -242,6 +249,7 @@
 <script src="/static/ref-audio-player.js"></script>
 <script src="/static/shared/preset-selector.js"></script>
 <script src="/static/shared/save-share.js"></script>
+<script type="module" src="/static/shared/gpt-timeline.js"></script>
 <script type="module" src="/static/audio-duplex/audio-duplex-app.js"></script>
 <script type="module">
 import { initNav } from '/static/shared/app-nav.js';

@@ -28,6 +28,9 @@ _EXPLICIT_TRIGGERS = [
     r"\b(consulting|asking)\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
     r"\b(i'm\s+asking|checking\s+with)\s+(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
     r"\b(ask(ing)?|consult(ing)?)\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
+    
+    # Implicit delegation triggers for calculation, taxes, and complex queries
+    r"\b(calculate\s+that|calculate\s+this|help\s+me\s+calculate|how\s+much\s+is\s+that|impuestos|ganancias|salario\s+neto|net\s+salary)\b",
 ]
 
 _DELEGATE_TAG_REGEX = re.compile(r"\[(?:DELEGATE|EXPERT):\s*(.*?)\]", re.IGNORECASE)
