@@ -2235,7 +2235,7 @@ async def duplex_ws(ws: WebSocket):
                 pass
 
     async def _process_audio_chunk(msg: Dict[str, Any]) -> None:
-        nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks
+        nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks, expert_task
         if worker.state.status == WorkerStatus.DUPLEX_PAUSED:
             await ws.send_json({"type": "error", "error": "Worker is paused"})
             return
