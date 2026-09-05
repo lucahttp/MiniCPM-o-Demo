@@ -64,7 +64,11 @@ export class AudioPlayer {
 
     // Public read-only accessors
     get turnActive() { return this._turnActive; }
-    get playing() { return this._playing; }
+    get playing() {
+        if (!this._ctx) return false;
+        const curTime = this._ctx.currentTime;
+        return (this._sources.length > 0) || (this._pendingChunks.length > 0) || (this._nextTime > curTime + 0.05);
+    }
     get ctx() { return this._ctx; }
     get nextTime() { return this._nextTime; }
     get gapCount() { return this._gapCount; }
@@ -270,16 +274,11 @@ export class AudioPlayer {
             const idx = this._sources.findIndex(s => s.source === source);
             if (idx >= 0) this._sources.splice(idx, 1);
             if (this._sources.length === 0 && this._pendingChunks.length === 0) {
-                if (!this._turnActive) {
-                    this._playing = false;
-                    this._playbackStartTime = 0;
-                    this._stopAheadMonitor();
-                    this._lastAheadMs = 0;
-                    this._emitMetrics({ isPlaying: false, ahead: 0 });
-                } else {
-                    this._lastAheadMs = 0;
-                    this._emitMetrics({ isPlaying: false, ahead: 0 });
-                }
+                this._playing = false;
+                this._playbackStartTime = 0;
+                this._stopAheadMonitor();
+                this._lastAheadMs = 0;
+                this._emitMetrics({ isPlaying: false, ahead: 0 });
             }
         };
     }
@@ -309,14 +308,12 @@ export class AudioPlayer {
             }
             const ahead = (this._nextTime - this._ctx.currentTime) * 1000;
             if (ahead <= 0 && this._sources.length === 0 && this._pendingChunks.length === 0) {
-                if (!this._turnActive) {
-                    this._playing = false;
-                    this._playbackStartTime = 0;
-                    this._stopAheadMonitor();
-                    this._lastAheadMs = 0;
-                    this._emitMetrics({ isPlaying: false, ahead: 0 });
-                    return;
-                }
+                this._playing = false;
+                this._playbackStartTime = 0;
+                this._stopAheadMonitor();
+                this._lastAheadMs = 0;
+                this._emitMetrics({ isPlaying: false, ahead: 0 });
+                return;
             }
             this._lastAheadMs = Math.max(0, ahead);
             this._emitMetrics({ isPlaying: true });
