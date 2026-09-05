@@ -125,7 +125,6 @@ const settingsPersistence = new SettingsPersistence('audio_duplex_settings', [
     // Expert Supervisor
     { id: 'expertEnabled', type: 'checkbox' },
     { id: 'expertProvider', type: 'select' },
-    { id: 'expertAutoSpeak', type: 'checkbox' },
 ]);
 
 // Priority: HTML defaults → server defaults → localStorage → preset (highest)
@@ -341,19 +340,9 @@ function handleExpertStatus(msg) {
         }
         scrollChatLog();
 
-        // Speak aloud via Web Speech Synthesis if enabled
-        const autoSpeak = document.getElementById('expertAutoSpeak')?.checked;
-        if (autoSpeak && window.speechSynthesis && text) {
-            try {
-                window.speechSynthesis.cancel();
-                const utter = new SpeechSynthesisUtterance(text);
-                utter.rate = 1.05;
-                const isSpanish = /[áéíóúñ¿¡]/i.test(text) || /\b(el|la|los|las|un|una|es|son|por|para|con)\b/i.test(text);
-                utter.lang = isSpanish ? 'es-ES' : 'en-US';
-                window.speechSynthesis.speak(utter);
-            } catch (synthErr) {
-                console.warn('[Expert] Speech synthesis error:', synthErr);
-            }
+        // Note: Audio is voiced directly through MiniCPM-o full-duplex stream
+        if (window.speechSynthesis) {
+            try { window.speechSynthesis.cancel(); } catch (_) {}
         }
     } else if (msg.status === 'cancelled') {
         if (currentExpertCard) {

@@ -329,6 +329,7 @@ class CppBackendWorker:
         audio_waveform: Optional[np.ndarray] = None,
         frame_list: Optional[list] = None,
         max_slice_nums: int = 1,
+        text: str = "",
     ) -> Dict[str, Any]:
         """Duplex 预填充 → /v1/stream/prefill"""
         cnt = self._duplex_chunk_counter
@@ -344,7 +345,7 @@ class CppBackendWorker:
             temp_image = self._save_pil_image_to_temp(frame_list[0], f"duplex_{cnt}")
             n_vision_images = 1
 
-        self._call_prefill(temp_audio, temp_image, cnt, max_slice_nums)
+        self._call_prefill(temp_audio, temp_image, cnt, max_slice_nums, text=text)
 
         if frame_list and len(frame_list) > 1:
             for i, frame in enumerate(frame_list[1:], 1):

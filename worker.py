@@ -596,14 +596,23 @@ class MiniCPMOWorker:
         audio_waveform: Optional[np.ndarray] = None,
         frame_list: Optional[list] = None,
         max_slice_nums: int = 1,
+        text: str = "",
     ) -> Dict[str, Any]:
         """Duplex 预填充"""
         duplex_view = self.processor.set_duplex_mode()
-        return duplex_view.prefill(
-            audio_waveform=audio_waveform,
-            frame_list=frame_list,
-            max_slice_nums=max_slice_nums,
-        )
+        try:
+            return duplex_view.prefill(
+                audio_waveform=audio_waveform,
+                frame_list=frame_list,
+                max_slice_nums=max_slice_nums,
+                text=text,
+            )
+        except TypeError:
+            return duplex_view.prefill(
+                audio_waveform=audio_waveform,
+                frame_list=frame_list,
+                max_slice_nums=max_slice_nums,
+            )
 
     def duplex_generate(
         self,
@@ -2176,6 +2185,7 @@ async def duplex_ws(ws: WebSocket):
     from core.expert import ExpertSupervisor, ExpertConfig, ExpertProvider
     expert_supervisor = ExpertSupervisor()
     expert_task: Optional[asyncio.Task] = None
+    pending_expert_text: Optional[str] = None
     accumulated_turn_text: List[str] = []
 
     async def pause_timeout_watchdog(timeout: float):
@@ -2191,6 +2201,7 @@ async def duplex_ws(ws: WebSocket):
             pass
 
     async def _run_expert(query_text: str, prov_override: Optional[str] = None):
+        nonlocal pending_expert_text
         target_prov = prov_override or expert_supervisor.config.provider.value
         try:
             await ws.send_json({
@@ -2204,6 +2215,7 @@ async def duplex_ws(ws: WebSocket):
                 provider_override=prov_override,
             )
             if expert_res.get("success"):
+                pending_expert_text = expert_res["text"]
                 await ws.send_json({
                     "type": "expert_status",
                     "status": "done",
@@ -2235,7 +2247,7 @@ async def duplex_ws(ws: WebSocket):
                 pass
 
     async def _process_audio_chunk(msg: Dict[str, Any]) -> None:
-        nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks, expert_task
+        nonlocal chunk_idx, dropped_audio_chunk_count, user_speech_active, consecutive_speech_chunks, consecutive_silence_chunks, model_speaking, model_speak_chunks, expert_task, pending_expert_text
         if worker.state.status == WorkerStatus.DUPLEX_PAUSED:
             await ws.send_json({"type": "error", "error": "Worker is paused"})
             return
@@ -2287,6 +2299,7 @@ async def duplex_ws(ws: WebSocket):
         if model_speaking and user_is_speaking:
             # 用户在模型说话时插话 -> 触发打断 (Barge-in)!
             logger.info(f"[Duplex] User barge-in interrupt (audio_rms={audio_rms:.4f})")
+            pending_expert_text = None
             if expert_task and not expert_task.done():
                 expert_task.cancel()
                 try:
@@ -2307,6 +2320,7 @@ async def duplex_ws(ws: WebSocket):
             sps = 0.1
         elif user_is_speaking:
             # 用户正在发言
+            pending_expert_text = None
             if expert_task and not expert_task.done():
                 expert_task.cancel()
                 try:
@@ -2361,6 +2375,16 @@ async def duplex_ws(ws: WebSocket):
             lps = 1.0
             sps = 1.0
 
+        # 如果有 Expert 返回的文本且用户当前没在说话，将 Expert 答案注入 MiniCPM-o 进行 TTS 发言
+        text_to_inject = ""
+        if pending_expert_text and not user_is_speaking:
+            text_to_inject = pending_expert_text
+            pending_expert_text = None
+            logger.info(f"[Duplex] Injecting pending expert text to MiniCPM-o ({len(text_to_inject)} chars): '{text_to_inject[:60]}...'")
+            sps = 4.0
+            lps = 0.0
+            chunk_force_listen = False
+
         try:
             # 等待上一轮 finalize 完成（保证 KV cache 状态一致）
             await finalize_done.wait()
@@ -2372,6 +2396,7 @@ async def duplex_ws(ws: WebSocket):
                     audio_waveform=audio_waveform,
                     frame_list=frame_list,
                     max_slice_nums=chunk_max_slice_nums,
+                    text=text_to_inject,
                 )
                 t_prefill = time.perf_counter()
                 gen_result = worker.duplex_generate(

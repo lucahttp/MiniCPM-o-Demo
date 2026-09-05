@@ -91,14 +91,16 @@ export class AudioPlayer {
     /** Start a new SPEAK turn */
     beginTurn() {
         if (this._turnActive) return;
-        this._stopAllSources();
         this._turnActive = true;
-        this._playing = false;
         this._turnIdx++;
-        this._pendingChunks = [];
-        this._nextTime = 0;
-        this._firstChunkTime = 0;
-        this._playbackStartTime = 0;
+        // If previous audio has completely finished playing, reset timeline:
+        if (!this._playing || this._nextTime <= (this._ctx ? this._ctx.currentTime : 0)) {
+            this._playing = false;
+            this._pendingChunks = [];
+            this._nextTime = 0;
+            this._firstChunkTime = 0;
+            this._playbackStartTime = 0;
+        }
         this._gapCount = 0;
         this._totalShiftMs = 0;
         this._lastAheadMs = 0;
@@ -229,18 +231,15 @@ export class AudioPlayer {
                 }
             }
             
-            // Jitter buffer smoothing: prevent accumulating timeline shifts
-            // by skipping the late portion of the chunk.
-            offset = now - this._nextTime;
-            if (offset >= buffer.duration) {
-                this._nextTime += buffer.duration;
-                return; // Drop entirely
-            }
+            // Seamless underrun recovery:
+            // Never drop audio chunks or clip audio samples. Play the full chunk starting now.
             scheduleTime = now;
+            offset = 0;
+            this._nextTime = now;
             
-            // Smoothly fade in to avoid clicking
+            // Smoothly fade in (5ms) to avoid clicking
             gainNode.gain.setValueAtTime(0, scheduleTime);
-            gainNode.gain.linearRampToValueAtTime(1, scheduleTime + 0.02);
+            gainNode.gain.linearRampToValueAtTime(1, scheduleTime + 0.005);
         }
 
         if (this.onRawAudio && rawSamples) {
