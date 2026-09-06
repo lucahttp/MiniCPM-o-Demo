@@ -34,16 +34,20 @@ class AgyExpertProvider(BaseExpertProvider):
 
         # Build composite prompt
         context_parts = []
-        if system_prompt:
-            context_parts.append(f"[Instrucción del sistema]: {system_prompt}")
+        default_inst = (
+            "Eres el supervisor experto consultado. Responde directamente a la consulta del usuario de forma concisa, "
+            "con datos y cálculos precisos en 2 a 3 oraciones para ser leída por voz. "
+            "NUNCA digas que estás transfiriendo, conectando ni pidiendo esperar. Da la respuesta o cálculo directamente."
+        )
+        context_parts.append(f"[Instrucción del sistema]: {system_prompt or default_inst}")
         if history:
             context_parts.append("[Contexto previo de conversación]:")
-            for h in history[-4:]:
+            for h in history[-6:]:
                 role = h.get("role", "user")
                 content = h.get("content", "")
                 context_parts.append(f"{role}: {content}")
-        context_parts.append(f"[Pregunta del usuario]: {query}")
-        context_parts.append("[Respuesta concisa en 1 a 3 oraciones para ser leída por voz]:")
+        context_parts.append(f"[Pregunta/Tarea del usuario a resolver]: {query}")
+        context_parts.append("[Tu respuesta experta directa para ser hablada por voz]:")
 
         full_prompt = "\n".join(context_parts)
 

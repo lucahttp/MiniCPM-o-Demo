@@ -36,8 +36,12 @@ _EXPLICIT_TRIGGERS = [
     # Complex programming / creation requests that need frontier expert
     r"\b(develop|build|create|code|program)\s+(a\s+|an\s+)?(website|web\s+app|application|script|program|backend|frontend)\b",
     
-    # Implicit delegation triggers for calculation, taxes, and complex queries
-    r"\b(calculate\s+that|calculate\s+this|help\s+me\s+calculate|how\s+much\s+is\s+that|impuestos|ganancias|salario\s+neto|net\s+salary)\b",
+    # Calculations, taxes, and salary queries (English & Spanish)
+    r"\b(calculate|computing|estimate|calcul[aá]|estim[aá])\s+(my\s+|the\s+|our\s+)?(salary|tax|taxes|income|net|gross|sueldo|salario|impuesto|impuestos|ganancias)\b",
+    r"\b(help\s+me\s+(to\s+)?(calculate|compute|estimate|figure\s+out)|ay[uú]dame\s+a\s+calcular)\b",
+    r"\b(tax\s+system|tax\s+rates?|taxes\s+in|income\s+tax|tax\s+bracket)\b",
+    r"\b(calculate\s+(that|this|it)|how\s+much\s+is\s+that|calcul[aá]\s+(eso|esto))\b",
+    r"\b(impuestos?|ganancias|salario\s+neto|net\s+salary|sueldo\s+neto|monotributo|jubilaci[oó]n|deducciones|retenciones)\b",
 ]
 
 _DELEGATE_TAG_REGEX = re.compile(r"\[(?:DELEGATE|EXPERT):\s*(.*?)\]", re.IGNORECASE)
@@ -168,6 +172,44 @@ class ExpertSupervisor:
         phrases = self.config.fillers_es if "es" in lang.lower() else self.config.fillers_en
         return random.choice(phrases)
 
+    _META_PATTERNS = [
+        r"(call|ask|consult|delegate|delayed|pass|use)\s+(to\s+)?(the\s+|an?\s+)?(expert|supervisor|agy|claude|minimax)",
+        r"call\s+the\s+expert\s+delegation",
+        r"(llama|llamale|preguntale|pasa|pasale|usa|delega)\s+(al?\s+|un\s+)?(experto|supervisor)",
+        r"^(calculate|comput[eo]|calcul[aá])\s+(that|this|it|eso|esto)[\s.!?,]*$",
+        r"^where\s+(are|is)\s+(them|it|the\s+calculation)",
+        r"^no\s+i\s+mean\s+",
+    ]
+
+    _SMALL_TALK_PATTERNS = [
+        r"^(hello|hi|hey|good\s+morning|good\s+afternoon|good\s+evening)\b",
+        r"^(how\s+are\s+you|how\s+do\s+you\s+do|how\s+is\s+it\s+going)\b",
+        r"^(really\s+good|doing\s+well|fine\s+thank\s+you|i'?m\s+good)\b",
+        r"^(thanks|thank\s+you|ok|okay|bye|goodbye)\b",
+    ]
+
+    def resolve_expert_query(self, query: str, history: Optional[List[Dict[str, str]]] = None) -> str:
+        """
+        If query is a meta-delegation command ('call the expert', 'delegate to supervisor', 'calculate that'),
+        synthesize the substantive topic from prior user turns so the expert answers the real question
+        rather than saying 'transferring you now'.
+        """
+        is_meta = any(re.search(p, query, re.I) for p in self._META_PATTERNS)
+        if is_meta and history:
+            substantive = []
+            for h in history:
+                if h.get("role") == "user":
+                    c = h.get("content", "").strip()
+                    not_meta = not any(re.search(p, c, re.I) for p in self._META_PATTERNS)
+                    not_small_talk = not any(re.search(p, c, re.I) for p in self._SMALL_TALK_PATTERNS)
+                    if not_meta and not_small_talk and len(c.split()) >= 2:
+                        substantive.append(c)
+            if substantive:
+                resolved = " | ".join(substantive)
+                logger.info(f"[ExpertSupervisor] Meta-delegation '{query[:50]}' resolved to substantive topic: '{resolved[:100]}'")
+                return resolved
+        return query
+
     async def execute(
         self,
         query: str,
@@ -178,10 +220,11 @@ class ExpertSupervisor:
         t0 = time.perf_counter()
         provider = self.get_provider(provider_override)
         provider_name = provider.name
+        resolved_query = self.resolve_expert_query(query, history)
 
         try:
             raw_result = await provider.execute(
-                query=query,
+                query=resolved_query,
                 history=history,
                 system_prompt=self.config.expert_system_prompt,
                 timeout=self.config.timeout_seconds,

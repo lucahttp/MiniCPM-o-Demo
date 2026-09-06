@@ -2211,11 +2211,7 @@ async def duplex_ws(ws: WebSocket):
             is_es = any(c in query_text.lower() for c in ["¿", "á", "é", "í", "ó", "ú", "ñ", "que", "como", "sobre", "cual", "cuanto", "por que"])
             filler_phrase = expert_supervisor.get_filler_phrase(lang="es" if is_es else "en")
 
-            # Inyectar de inmediato para que MiniCPM-o comience a vocalizar el pensamiento / investigación
-            pending_expert_text = filler_phrase
-            turn_has_injected_expert = True
-            logger.info(f"[Duplex] Injected thinking filler: '{filler_phrase}'")
-
+            # Notificar al cliente de que el experto está procesando
             await ws.send_json({
                 "type": "expert_status",
                 "status": "thinking",
@@ -2223,8 +2219,8 @@ async def duplex_ws(ws: WebSocket):
                 "provider": target_prov,
                 "filler": filler_phrase,
             })
-            # Pasar los últimos 6 turnos para mantener contexto semántico y memoria
-            context_history = session_dialog_history[-6:] if session_dialog_history else None
+            # Pasar los últimos 8 turnos para mantener contexto semántico y memoria
+            context_history = session_dialog_history[-8:] if session_dialog_history else None
             expert_res = await expert_supervisor.execute(
                 query=query_text,
                 history=context_history,
@@ -2233,7 +2229,8 @@ async def duplex_ws(ws: WebSocket):
             if expert_res.get("success"):
                 pending_expert_text = expert_res["text"]
                 turn_has_injected_expert = True
-                session_dialog_history.append({"role": "user", "content": query_text})
+                if not (session_dialog_history and session_dialog_history[-1].get("content") == query_text):
+                    session_dialog_history.append({"role": "user", "content": query_text})
                 session_dialog_history.append({"role": "assistant", "content": expert_res["text"]})
                 await ws.send_json({
                     "type": "expert_status",
