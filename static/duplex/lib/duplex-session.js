@@ -133,6 +133,9 @@ export class DuplexSession {
     /** Force listen state changed. */
     onForceListenChange(active) {}
 
+    /** Barge-in interruption occurred (user spoke over AI). */
+    onInterrupt() {}
+
     // ==== Core API ====
 
     /**
@@ -421,6 +424,7 @@ export class DuplexSession {
                     this.currentSpeakText = '';
                 }
                 this.onSystemLog('Interrupted by user speech');
+                if (this.onInterrupt) this.onInterrupt();
                 break;
             case 'expert_status':
                 this.onExpertStatus(msg);

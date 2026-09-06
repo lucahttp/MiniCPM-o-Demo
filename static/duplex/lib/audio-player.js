@@ -327,10 +327,25 @@ export class AudioPlayer {
     _stopAllSources() {
         if (this._delayTimer) { clearTimeout(this._delayTimer); this._delayTimer = null; }
         this._stopAheadMonitor();
+        const now = (this._ctx && this._ctx.state !== 'closed') ? this._ctx.currentTime : 0;
+        const fadeSec = 0.008; // 8ms anti-pop micro-fade for seamless barge-in
         for (const s of this._sources) {
-            try { s.source.stop(); } catch (_) {}
-            try { s.source.disconnect(); } catch (_) {}
-            try { s.gainNode.disconnect(); } catch (_) {}
+            try {
+                if (now > 0 && s.gainNode && s.gainNode.gain) {
+                    s.gainNode.gain.cancelScheduledValues(now);
+                    s.gainNode.gain.setValueAtTime(s.gainNode.gain.value, now);
+                    s.gainNode.gain.linearRampToValueAtTime(0.0001, now + fadeSec);
+                    s.source.stop(now + fadeSec);
+                    setTimeout(() => {
+                        try { s.source.disconnect(); } catch (_) {}
+                        try { s.gainNode.disconnect(); } catch (_) {}
+                    }, Math.ceil((fadeSec * 1000) + 30));
+                } else {
+                    try { s.source.stop(); } catch (_) {}
+                    try { s.source.disconnect(); } catch (_) {}
+                    try { s.gainNode.disconnect(); } catch (_) {}
+                }
+            } catch (_) {}
         }
         this._sources = [];
         this._playing = false;

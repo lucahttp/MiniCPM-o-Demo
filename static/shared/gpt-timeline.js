@@ -7,15 +7,16 @@ export class GPTTimeline extends HTMLElement {
                 :host {
                     display: block;
                     width: 100%;
-                    height: 200px;
-                    background: #111;
-                    color: #fff;
+                    height: 220px;
+                    background: #0f1117;
+                    color: #e2e8f0;
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
                     position: relative;
-                    border-radius: 8px;
+                    border-radius: 10px;
                     overflow: hidden;
                     box-sizing: border-box;
-                    border: 1px solid #333;
+                    border: 1px solid #1e293b;
+                    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
                 }
                 .timeline-container {
                     display: flex;
@@ -23,67 +24,104 @@ export class GPTTimeline extends HTMLElement {
                     height: 100%;
                 }
                 .timeline-labels {
-                    width: 100px;
+                    width: 110px;
                     height: 100%;
-                    background: #1a1a1a;
+                    background: #131824;
                     display: flex;
                     flex-direction: column;
-                    border-right: 1px solid #333;
+                    border-right: 1px solid #1e293b;
                     z-index: 10;
                     flex-shrink: 0;
+                }
+                .header-placeholder {
+                    height: 24px;
+                    border-bottom: 1px solid #1e293b;
+                    display: flex;
+                    align-items: center;
+                    padding-left: 8px;
+                    font-size: 10px;
+                    color: #64748b;
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
                 }
                 .label {
                     flex: 1;
                     display: flex;
                     align-items: center;
+                    gap: 6px;
                     padding-left: 10px;
-                    font-size: 12px;
+                    font-size: 11px;
                     font-weight: 600;
-                    letter-spacing: 0.5px;
-                    border-bottom: 1px solid #2a2a2a;
+                    letter-spacing: 0.3px;
+                    border-bottom: 1px solid #1e293b;
                 }
                 .label:last-child {
                     border-bottom: none;
                 }
-                .label.user { color: #4ade80; }
+                .dot {
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 50%;
+                }
+                .label.user { color: #34d399; }
+                .label.user .dot { background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.6); }
                 .label.ai { color: #60a5fa; }
-                .label.expert { color: #fb923c; }
+                .label.ai .dot { background: #3b82f6; box-shadow: 0 0 6px rgba(59, 130, 246, 0.6); }
+                .label.expert { color: #fbbf24; }
+                .label.expert .dot { background: #f59e0b; box-shadow: 0 0 6px rgba(245, 158, 11, 0.6); }
                 
                 .timeline-scroll {
                     flex: 1;
                     height: 100%;
                     position: relative;
-                    overflow: hidden; /* canvas will handle scrolling internally */
+                    overflow: hidden;
+                    cursor: crosshair;
                 }
                 canvas {
                     display: block;
                     width: 100%;
                     height: 100%;
                 }
-                .time-indicator {
+                .live-badge {
                     position: absolute;
-                    top: 0;
-                    left: 0;
-                    background: rgba(255, 255, 255, 0.8);
-                    color: #000;
-                    font-size: 10px;
-                    padding: 2px 4px;
-                    border-radius: 4px;
+                    top: 4px;
+                    right: 8px;
+                    background: rgba(239, 68, 68, 0.15);
+                    border: 1px solid rgba(239, 68, 68, 0.5);
+                    color: #ef4444;
+                    font-size: 9px;
+                    font-weight: 700;
+                    padding: 2px 6px;
+                    border-radius: 9999px;
+                    letter-spacing: 0.5px;
                     pointer-events: none;
-                    transform: translateX(-50%);
-                    z-index: 20;
-                    display: none;
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                }
+                .live-pulse {
+                    width: 5px;
+                    height: 5px;
+                    background: #ef4444;
+                    border-radius: 50%;
+                    animation: pulse 1.2s infinite;
+                }
+                @keyframes pulse {
+                    0% { opacity: 1; transform: scale(1); }
+                    50% { opacity: 0.4; transform: scale(1.3); }
+                    100% { opacity: 1; transform: scale(1); }
                 }
             </style>
             <div class="timeline-container">
                 <div class="timeline-labels">
-                    <div class="label user">User</div>
-                    <div class="label ai">MiniCPM-o</div>
-                    <div class="label expert">Expert</div>
+                    <div class="header-placeholder">Channels</div>
+                    <div class="label user"><span class="dot"></span>User</div>
+                    <div class="label ai"><span class="dot"></span>MiniCPM-o</div>
+                    <div class="label expert"><span class="dot"></span>Expert/Tool</div>
                 </div>
                 <div class="timeline-scroll">
                     <canvas></canvas>
-                    <div class="time-indicator" id="timeIndicator">0:00</div>
+                    <div class="live-badge"><span class="live-pulse"></span>LIVE</div>
                 </div>
             </div>
         `;
@@ -99,13 +137,14 @@ export class GPTTimeline extends HTMLElement {
         // Data tracks
         this.userAudio = []; // { t, rms }
         this.aiAudio = []; // { t, rms }
-        this.expertTasks = []; // { id, name, startT, endT, status: 'thinking'|'done' }
+        this.expertTasks = []; // { id, name, startT, endT, status: 'thinking'|'done'|'error' }
         this.arrows = []; // { from: [lane, t], to: [lane, t] }
+        this.bargeIns = []; // { t }
 
         // Layout config
-        this.pixelsPerSecond = 50;
-        this.laneHeight = 0; // Calculated on resize
-        this.headerHeight = 20; // Top axis
+        this.pixelsPerSecond = 55;
+        this.headerHeight = 24; // Top timeline axis
+        this.laneHeight = 0; // Calculated dynamically on resize
 
         this.resizeObserver = new ResizeObserver(() => this.resize());
         this.resizeObserver.observe(this);
@@ -122,9 +161,11 @@ export class GPTTimeline extends HTMLElement {
 
     resize() {
         const rect = this.canvas.parentElement.getBoundingClientRect();
-        this.canvas.width = rect.width * window.devicePixelRatio;
-        this.canvas.height = rect.height * window.devicePixelRatio;
-        this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+        if (!rect.width || !rect.height) return;
+        const dpr = window.devicePixelRatio || 1;
+        this.canvas.width = Math.round(rect.width * dpr);
+        this.canvas.height = Math.round(rect.height * dpr);
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         
         this.laneHeight = (rect.height - this.headerHeight) / 3;
         if (!this.isRunning) this.draw();
@@ -138,6 +179,7 @@ export class GPTTimeline extends HTMLElement {
         this.aiAudio = [];
         this.expertTasks = [];
         this.arrows = [];
+        this.bargeIns = [];
         this.isRunning = true;
         this.loop();
     }
@@ -146,22 +188,30 @@ export class GPTTimeline extends HTMLElement {
         this.isRunning = false;
     }
 
-    // Call this frequently with RMS value (0.0 to 1.0)
+    reset() {
+        this.currentTime = 0;
+        this.userAudio = [];
+        this.aiAudio = [];
+        this.expertTasks = [];
+        this.arrows = [];
+        this.bargeIns = [];
+        if (!this.isRunning) this.draw();
+    }
+
     addUserAudio(rms) {
         if (!this.isRunning) return;
-        this.userAudio.push({ t: this.currentTime, rms });
+        this.userAudio.push({ t: this.currentTime, rms: Math.max(0, Math.min(1, rms)) });
     }
 
     addAiAudio(rms) {
         if (!this.isRunning) return;
-        this.aiAudio.push({ t: this.currentTime, rms });
+        this.aiAudio.push({ t: this.currentTime, rms: Math.max(0, Math.min(1, rms)) });
     }
 
     startExpertTask(name) {
         if (!this.isRunning) return null;
         const id = Math.random().toString(36).substr(2, 9);
         this.expertTasks.push({ id, name, startT: this.currentTime, endT: null, status: 'thinking' });
-        // Arrow from AI to Expert
         this.arrows.push({ from: ['ai', this.currentTime], to: ['expert', this.currentTime] });
         return id;
     }
@@ -172,63 +222,63 @@ export class GPTTimeline extends HTMLElement {
         if (task) {
             task.endT = this.currentTime;
             task.status = success ? 'done' : 'error';
-            // Arrow from Expert back to AI
             this.arrows.push({ from: ['expert', this.currentTime], to: ['ai', this.currentTime] });
         }
     }
-    
-    // Allows injecting exact time instead of using performance.now
-    tick(deltaTimeMs) {
-        if (this.isRunning) {
-             this.currentTime += deltaTimeMs / 1000;
-        }
+
+    recordBargeIn() {
+        if (!this.isRunning) return;
+        this.bargeIns.push({ t: this.currentTime });
     }
 
-    // --- Internal ---
+    // --- Internal Render Loop ---
     loop() {
         if (!this.isRunning) return;
-        
-        // Auto-update time if not ticked manually
         const now = performance.now();
         this.currentTime = (now - this.startTime) / 1000;
-        
         this.draw();
         requestAnimationFrame(() => this.loop());
     }
 
     draw() {
-        const width = this.canvas.width / window.devicePixelRatio;
-        const height = this.canvas.height / window.devicePixelRatio;
+        const width = this.canvas.width / (window.devicePixelRatio || 1);
+        const height = this.canvas.height / (window.devicePixelRatio || 1);
         const ctx = this.ctx;
+        if (!width || !height) return;
 
         ctx.clearRect(0, 0, width, height);
 
-        // Determine view window (scroll to keep current time on the right if needed)
         const viewDuration = width / this.pixelsPerSecond;
         let startT = 0;
-        
-        // Keep scrubber at 80% of width if it exceeds
-        const maxScrubberX = width * 0.8;
+        const maxScrubberX = width * 0.78;
         if (this.currentTime * this.pixelsPerSecond > maxScrubberX) {
             startT = this.currentTime - (maxScrubberX / this.pixelsPerSecond);
         }
 
         ctx.save();
         
-        // Draw axis & backgrounds
+        // Draw grid, axis & backgrounds
         this.drawBackground(ctx, width, height, startT, viewDuration);
         
-        // Draw Lanes
+        // Lane coordinates
         const laneYs = {
             user: this.headerHeight,
             ai: this.headerHeight + this.laneHeight,
             expert: this.headerHeight + this.laneHeight * 2
         };
 
-        this.drawWaveform(ctx, this.userAudio, startT, laneYs.user, '#4ade80');
-        this.drawWaveform(ctx, this.aiAudio, startT, laneYs.ai, '#60a5fa');
-        this.drawExpertTasks(ctx, startT, laneYs.expert, '#fb923c');
+        // Draw waveforms
+        this.drawWaveform(ctx, this.userAudio, startT, laneYs.user, '#34d399', 'rgba(52, 211, 153, 0.25)');
+        this.drawWaveform(ctx, this.aiAudio, startT, laneYs.ai, '#60a5fa', 'rgba(96, 165, 250, 0.25)');
+        
+        // Draw Expert tasks
+        this.drawExpertTasks(ctx, startT, laneYs.expert);
+
+        // Draw Bezier arrows
         this.drawArrows(ctx, startT, laneYs);
+
+        // Draw Barge-in markers
+        this.drawBargeIns(ctx, startT, height);
 
         // Draw Scrubber
         const scrubberX = (this.currentTime - startT) * this.pixelsPerSecond;
@@ -237,38 +287,37 @@ export class GPTTimeline extends HTMLElement {
             ctx.moveTo(scrubberX, this.headerHeight);
             ctx.lineTo(scrubberX, height);
             ctx.strokeStyle = '#ef4444';
-            ctx.lineWidth = 2;
+            ctx.lineWidth = 1.5;
             ctx.stroke();
             
-            // Draw time bubble on canvas
+            // Scrubber time bubble
             ctx.fillStyle = '#ef4444';
             ctx.beginPath();
-            ctx.roundRect(scrubberX - 20, 2, 40, 16, 4);
+            ctx.roundRect(scrubberX - 18, 4, 36, 15, 3);
             ctx.fill();
             
-            ctx.fillStyle = '#fff';
-            ctx.font = '10px sans-serif';
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 9px monospace';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(this.formatTime(this.currentTime), scrubberX, 10);
+            ctx.fillText(this.formatTime(this.currentTime), scrubberX, 11.5);
         }
 
         ctx.restore();
     }
 
     drawBackground(ctx, w, h, startT, viewDuration) {
-        // Draw alternating rows
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
-        ctx.fillRect(0, this.headerHeight + this.laneHeight, w, this.laneHeight); // AI lane bg
+        // Alternating row highlights
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.015)';
+        ctx.fillRect(0, this.headerHeight + this.laneHeight, w, this.laneHeight); // AI lane
 
-        // Draw grid lines
-        ctx.strokeStyle = '#333';
+        // Grid lines & tick labels
+        ctx.strokeStyle = '#1e293b';
         ctx.lineWidth = 1;
-        ctx.font = '10px sans-serif';
-        ctx.fillStyle = '#666';
+        ctx.font = '9px monospace';
+        ctx.fillStyle = '#64748b';
         ctx.textAlign = 'left';
 
-        // Tick marks every 1 second
         const firstTick = Math.floor(startT);
         const lastTick = Math.ceil(startT + viewDuration);
         
@@ -276,96 +325,105 @@ export class GPTTimeline extends HTMLElement {
             const x = (t - startT) * this.pixelsPerSecond;
             if (x >= 0 && x <= w) {
                 ctx.beginPath();
-                ctx.moveTo(x, this.headerHeight - 5);
+                ctx.moveTo(x, this.headerHeight - 4);
                 ctx.lineTo(x, h);
                 ctx.stroke();
                 
-                if (t % 5 === 0) { // Label every 5 seconds
-                    ctx.fillText(this.formatTime(t), x + 2, 10);
+                if (t % 5 === 0) {
+                    ctx.fillText(this.formatTime(t), x + 3, 12);
                 }
             }
         }
         
-        // Draw Lane dividers
+        // Dividers
         ctx.beginPath();
         ctx.moveTo(0, this.headerHeight); ctx.lineTo(w, this.headerHeight);
         ctx.moveTo(0, this.headerHeight + this.laneHeight); ctx.lineTo(w, this.headerHeight + this.laneHeight);
         ctx.moveTo(0, this.headerHeight + this.laneHeight * 2); ctx.lineTo(w, this.headerHeight + this.laneHeight * 2);
-        ctx.strokeStyle = '#222';
+        ctx.strokeStyle = '#1e293b';
         ctx.stroke();
     }
 
-    drawWaveform(ctx, data, startT, yOffset, color) {
-        if (data.length === 0) return;
-        
+    drawWaveform(ctx, data, startT, yOffset, strokeColor, fillColor) {
+        if (!data || data.length === 0) return;
         const centerY = yOffset + (this.laneHeight / 2);
-        const maxAmp = (this.laneHeight / 2) * 0.8;
-        
-        ctx.beginPath();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
+        const maxAmp = (this.laneHeight / 2) * 0.85;
 
-        // Simple bar drawing for waveform
+        ctx.save();
+        ctx.strokeStyle = strokeColor;
+        ctx.fillStyle = fillColor;
+        ctx.lineWidth = 1.5;
+
         for (let i = 0; i < data.length; i++) {
             const pt = data[i];
-            if (pt.t < startT) continue; // Offscreen left
+            if (pt.t < startT) continue;
             
             const x = (pt.t - startT) * this.pixelsPerSecond;
-            const h = pt.rms * maxAmp;
+            const h = Math.max(1.5, pt.rms * maxAmp);
             
-            ctx.moveTo(x, centerY - h);
-            ctx.lineTo(x, centerY + h);
+            // Rounded bar
+            ctx.beginPath();
+            ctx.roundRect(x - 1, centerY - h, 2, h * 2, 1);
+            ctx.fill();
         }
-        ctx.stroke();
+        ctx.restore();
     }
 
-    drawExpertTasks(ctx, startT, yOffset, color) {
-        const padding = 10;
+    drawExpertTasks(ctx, startT, yOffset) {
+        const padding = 8;
         const h = this.laneHeight - (padding * 2);
         
-        ctx.font = '12px sans-serif';
+        ctx.font = '11px -apple-system, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         
         for (const task of this.expertTasks) {
-            const endT = task.endT || this.currentTime; // if not done, draw to current time
+            const endT = task.endT || this.currentTime;
             if (endT < startT) continue;
             
             const x = (task.startT - startT) * this.pixelsPerSecond;
-            let width = (endT - task.startT) * this.pixelsPerSecond;
-            if (width < 2) width = 2; // min width
-            
+            let width = Math.max(16, (endT - task.startT) * this.pixelsPerSecond);
             const y = yOffset + padding;
             
-            // Draw block
-            ctx.fillStyle = task.status === 'thinking' ? 'rgba(251, 146, 60, 0.5)' : 'rgba(251, 146, 60, 0.8)';
-            ctx.beginPath();
-            ctx.roundRect(x, y, width, h, 4);
-            ctx.fill();
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 1;
-            ctx.stroke();
+            ctx.save();
+            if (task.status === 'thinking') {
+                ctx.fillStyle = 'rgba(245, 158, 11, 0.25)';
+                ctx.strokeStyle = '#f59e0b';
+                ctx.shadowColor = 'rgba(245, 158, 11, 0.6)';
+                ctx.shadowBlur = 8;
+            } else if (task.status === 'done') {
+                ctx.fillStyle = 'rgba(16, 185, 129, 0.2)';
+                ctx.strokeStyle = '#10b981';
+            } else {
+                ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+                ctx.strokeStyle = '#ef4444';
+            }
 
-            // Draw text if enough width
-            if (width > 30) {
-                ctx.fillStyle = '#fff';
-                // Clip text
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.roundRect(x, y, width, h, 6);
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+
+            // Task label
+            if (width > 35) {
                 ctx.save();
                 ctx.beginPath();
-                ctx.roundRect(x, y, width, h, 4);
+                ctx.roundRect(x, y, width, h, 6);
                 ctx.clip();
-                ctx.fillText(task.name, x + width/2, y + h/2);
+                ctx.fillStyle = '#f8fafc';
+                ctx.font = 'bold 10px sans-serif';
+                const label = task.status === 'thinking' ? `⚡ ${task.name}...` : `✓ ${task.name}`;
+                ctx.fillText(label, x + width / 2, y + h / 2);
                 ctx.restore();
             }
         }
     }
 
     drawArrows(ctx, startT, laneYs) {
-        ctx.strokeStyle = '#fff';
-        ctx.fillStyle = '#fff';
-        ctx.lineWidth = 2;
+        ctx.save();
+        ctx.lineWidth = 1.5;
         
         for (const arrow of this.arrows) {
             if (arrow.from[1] < startT && arrow.to[1] < startT) continue;
@@ -373,39 +431,62 @@ export class GPTTimeline extends HTMLElement {
             const startX = (arrow.from[1] - startT) * this.pixelsPerSecond;
             const endX = (arrow.to[1] - startT) * this.pixelsPerSecond;
             
-            // Get center Y of lanes
             const getCenterY = (lane) => laneYs[lane] + (this.laneHeight / 2);
-            
             const startY = getCenterY(arrow.from[0]);
             const endY = getCenterY(arrow.to[0]);
 
-            // Draw arrow line
+            const isDown = startY < endY;
+            ctx.strokeStyle = isDown ? '#f59e0b' : '#34d399';
+            ctx.fillStyle = ctx.strokeStyle;
+
             ctx.beginPath();
             ctx.moveTo(startX, startY);
             
-            if (Math.abs(startX - endX) < 2) {
-                // Vertical line
+            if (Math.abs(startX - endX) < 3) {
                 ctx.lineTo(startX, endY);
-                this.drawArrowhead(ctx, startX, endY, startY < endY ? Math.PI/2 : -Math.PI/2);
+                this.drawArrowhead(ctx, startX, endY, isDown ? Math.PI/2 : -Math.PI/2);
             } else {
-                // Curved line (e.g. from Expert back to AI delayed)
-                ctx.bezierCurveTo(startX + 20, startY, endX - 20, endY, endX, endY);
-                // Angle at end
+                ctx.bezierCurveTo(startX + 18, startY, endX - 18, endY, endX, endY);
                 const angle = Math.atan2(endY - startY, endX - startX);
                 this.drawArrowhead(ctx, endX, endY, angle);
             }
             ctx.stroke();
         }
+        ctx.restore();
     }
-    
+
+    drawBargeIns(ctx, startT, height) {
+        if (!this.bargeIns || this.bargeIns.length === 0) return;
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 1.2;
+
+        for (const b of this.bargeIns) {
+            if (b.t < startT) continue;
+            const x = (b.t - startT) * this.pixelsPerSecond;
+            ctx.beginPath();
+            ctx.moveTo(x, this.headerHeight);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+
+            // Interruption flag badge
+            ctx.fillStyle = '#ef4444';
+            ctx.beginPath();
+            ctx.roundRect(x - 3, this.headerHeight + 2, 6, 8, 2);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+
     drawArrowhead(ctx, x, y, angle) {
         ctx.save();
         ctx.translate(x, y);
         ctx.rotate(angle);
         ctx.beginPath();
         ctx.moveTo(0, 0);
-        ctx.lineTo(-6, -4);
-        ctx.lineTo(-6, 4);
+        ctx.lineTo(-5, -3.5);
+        ctx.lineTo(-5, 3.5);
         ctx.fill();
         ctx.restore();
     }

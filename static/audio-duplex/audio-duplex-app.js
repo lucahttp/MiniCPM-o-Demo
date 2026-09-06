@@ -30,6 +30,9 @@ import {
 } from '../duplex/ui/duplex-ui.js';
 import { startDingDongLoop, playAlarmBell, playSessionChime } from '../duplex/lib/queue-chimes.js';
 import { initRefAudio } from '../duplex/ui/ref-audio-init.js';
+import { MicroEarcons } from '../shared/micro-earcons.js';
+
+const earcons = new MicroEarcons();
 
 // ============================================================================
 // Constants & State
@@ -64,6 +67,17 @@ let lastUserTimelineSample = 0;
 const interactionTimeline = document.getElementById('interactionTimeline');
 const timelineWrapper = document.getElementById('timelineWrapper');
 const toggleTimelineBtn = document.getElementById('toggleTimelineBtn');
+
+if (toggleTimelineBtn && timelineWrapper) {
+    toggleTimelineBtn.addEventListener('click', () => {
+        const isHidden = timelineWrapper.style.display === 'none';
+        timelineWrapper.style.display = isHidden ? '' : 'none';
+        toggleTimelineBtn.textContent = isHidden ? '📊 Ocultar' : '📊 Cronograma';
+        if (isHidden && interactionTimeline) {
+            interactionTimeline.resize();
+        }
+    });
+}
 
 // 排队倒计时（使用共享 CountdownTimer 模块）
 import { CountdownTimer } from '../lib/countdown-timer.js';
@@ -316,6 +330,7 @@ let currentExpertCard = null;
 function handleExpertStatus(msg) {
     const prov = (msg.provider || 'Expert').toUpperCase();
     if (msg.status === 'thinking') {
+        earcons.playExpertDelegation();
         if (interactionTimeline && interactionTimeline.isRunning) {
             const taskName = msg.query ? (msg.query.length > 20 ? msg.query.slice(0, 20) + '…' : msg.query) : prov;
             currentTimelineTaskId = interactionTimeline.startExpertTask(taskName);
@@ -339,6 +354,7 @@ function handleExpertStatus(msg) {
         scrollChatLog();
         currentExpertCard = el;
     } else if (msg.status === 'done') {
+        earcons.playVoiceReturn();
         if (interactionTimeline && currentTimelineTaskId) {
             interactionTimeline.endExpertTask(currentTimelineTaskId, true);
             currentTimelineTaskId = null;
@@ -1024,8 +1040,16 @@ async function startSession() {
     session.onPrepared = async () => {
         if (session.audioPlayer && session.audioPlayer._ctx) {
             adxDeviceSelector.applySinkId(session.audioPlayer._ctx);
+            earcons.setAudioContext(session.audioPlayer._ctx);
         }
         await playSessionChime();
+        earcons.playStartListening();
+    };
+    session.onInterrupt = () => {
+        if (interactionTimeline && interactionTimeline.isRunning) {
+            interactionTimeline.recordBargeIn();
+        }
+        earcons.playBargeIn();
     };
     session.onForceListenChange = (active) => setDefaultForceListenBtnState(active);
     session.onCleanup = () => {
@@ -1124,6 +1148,15 @@ async function startSession() {
                         ai_playing: !!(session && session.audioPlayer && session.audioPlayer.playing),
                     });
                     if (sessionRecorder) sessionRecorder.pushLeft(chunk.audio);
+                    if (interactionTimeline && interactionTimeline.isRunning && chunk.audio) {
+                        let sumSq = 0;
+                        const step = Math.max(1, (chunk.audio.length / 64) | 0);
+                        for (let i = 0; i < chunk.audio.length; i += step) {
+                            sumSq += chunk.audio[i] * chunk.audio[i];
+                        }
+                        const rms = Math.sqrt(sumSq / (chunk.audio.length / step));
+                        interactionTimeline.addUserAudio(Math.min(1.0, rms * 4.0));
+                    }
                 };
                 media.onEnd = () => {
                     addSystemLog('File playback completed (including padding). Auto-stopping session.');
@@ -1282,6 +1315,15 @@ async function startMicrophone() {
                 ai_playing: !!(session && session.audioPlayer && session.audioPlayer.playing),
             });
             if (sessionRecorder) sessionRecorder.pushLeft(chunk);
+            if (interactionTimeline && interactionTimeline.isRunning && chunk) {
+                let sumSq = 0;
+                const step = Math.max(1, (chunk.length / 64) | 0);
+                for (let i = 0; i < chunk.length; i += step) {
+                    sumSq += chunk[i] * chunk[i];
+                }
+                const rms = Math.sqrt(sumSq / (chunk.length / step));
+                interactionTimeline.addUserAudio(Math.min(1.0, rms * 4.0));
+            }
         }
     };
 
