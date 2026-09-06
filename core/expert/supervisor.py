@@ -16,18 +16,25 @@ logger = logging.getLogger(__name__)
 
 # Trigger keywords for delegation (Spanish and English explicit intent)
 _EXPLICIT_TRIGGERS = [
-    # Spanish explicit delegation intent
+    # Spanish explicit delegation intent (both user requesting and assistant announcing)
     r"\b(d[eé]jame|voy\s+a|un\s+segundo,?\s+voy\s+a|espera\s+que)\s+(consultar|preguntar|averiguar|pedirle|buscar)\s+(con\s+el\s+|al?\s+)?(experto|supervisor|agy|claude|minimax)\b",
     r"\b(consult[aá](ndo|r[eé])?|pregunt[aá](ndo|r[eé])?)\s+(al?\s+|con\s+el\s+)?(experto|supervisor|agy|claude|minimax)\b",
     r"\b(preg[uú]ntale?\s+a|consult[aá](le)?\s+al?)\s+(agy|claude|minimax|experto)\b",
     r"\b(le\s+pregunto\s+al?\s+(experto|supervisor|agy|claude|minimax))\b",
     r"\b(consultando\s+al?\s+(experto|supervisor|agy|claude|minimax))\b",
+    r"\b(llam[aá](r|le)?|pas[aá](r|le)?|us[aá](r)?|deleg[aá](r)?)\s+(al?\s+|con\s+el\s+)?(experto|supervisor|agy|claude|minimax)\b",
+    r"\b(experto|supervisor)\s+(para\s+que|que\s+nos\s+ayude|que\s+lo\s+haga)\b",
 
-    # English explicit delegation intent
+    # English explicit delegation intent (both user requesting and assistant announcing)
     r"\b(let\s+me|i('ll|\s+will)|one\s+second,?\s+i'll)\s+(check|ask|consult|find\s+out|look\s*up)\s+(with\s+the\s+|the\s+)?(expert|supervisor|agy|claude|minimax)\b",
     r"\b(consulting|asking)\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
     r"\b(i'm\s+asking|checking\s+with)\s+(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
+    r"\b(can\s+you\s+|could\s+you\s+|please\s+)?(call|ask|consult|delegate|delayed|pass\s+(it\s+)?to|use)\s+(to\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
+    r"\b(call\s+the\s+expert|call\s+the\s+supervisor|delegate\s+to\s+the\s+expert|delayed\s+to\s+the\s+expert)\b",
     r"\b(ask(ing)?|consult(ing)?)\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
+
+    # Complex programming / creation requests that need frontier expert
+    r"\b(develop|build|create|code|program)\s+(a\s+|an\s+)?(website|web\s+app|application|script|program|backend|frontend)\b",
     
     # Implicit delegation triggers for calculation, taxes, and complex queries
     r"\b(calculate\s+that|calculate\s+this|help\s+me\s+calculate|how\s+much\s+is\s+that|impuestos|ganancias|salario\s+neto|net\s+salary)\b",
@@ -220,3 +227,67 @@ class ExpertSupervisor:
         t = re.sub(r"\n+", " ", t)
         t = re.sub(r"\s+", " ", t).strip()
         return t
+
+    # ── Passive Response Guardrail ──────────────────────────────────────────
+    # Patterns that match empty/passive AI responses that don't actually help
+    _PASSIVE_PATTERNS = [
+        r"^(sure|ok(ay)?|alright|of course|certainly|sounds good|yeah|yes|great|got it|right)[\s,!.]*$",
+        r"^(sure|ok(ay)?|alright|of course|certainly),?\s+(let'?s\s+(do|talk|discuss|get|try)|i\s+can\s+help|that'?s\s+(interesting|great|cool|nice))",
+        r"^(i'?m\s+afraid\s+i\s+can'?t|i\s+can'?t\s+do\s+that)",
+        r"^(claro|por supuesto|de acuerdo|okey|seguro|bueno|dale|bien)[\s,!.]*$",
+        r"^(claro|por supuesto|de acuerdo),?\s+(hablemos|vamos|hagamos)",
+    ]
+    _PASSIVE_RE = [re.compile(p, re.IGNORECASE) for p in _PASSIVE_PATTERNS]
+
+    # Patterns indicating the user made a substantive request (not just small talk)
+    _USER_SUBSTANTIVE_PATTERNS = [
+        r"\b(help|develop|build|create|make|code|program|design|calculate|compute|search|find|explain|tell\s+me|show\s+me|can\s+you)\b",
+        r"\b(ayud|desarroll|constru|cre[aá]|progra|diseñ|calcul|busc|explic|dime|muestr|pued[eo]s)\b",
+        r"\b(website|app|application|project|system|tool|page|database)\b",
+        r"\b(expert|supervisor|agy|claude|delegate|delega)\b",
+        r"\b(call\s+the\s+expert|llam[aá]\s+al\s+experto|consult|delegat?e?|pedi[rl]e)\b",
+    ]
+    _USER_SUBSTANTIVE_RE = [re.compile(p, re.IGNORECASE) for p in _USER_SUBSTANTIVE_PATTERNS]
+
+    def is_passive_response(self, ai_text: str) -> bool:
+        """Check if AI text is an empty/passive acknowledgment that doesn't actually help."""
+        clean = ai_text.strip().rstrip(".")
+        if not clean:
+            return True
+        # Short response (< 12 words) that matches passive patterns
+        words = clean.split()
+        if len(words) > 15:
+            return False  # Longer responses are probably substantive
+        for pat in self._PASSIVE_RE:
+            if pat.search(clean):
+                return True
+        return False
+
+    def extract_user_request_from_history(self, history: List[Dict[str, str]]) -> Optional[str]:
+        """Get the most recent substantive user request from dialog history."""
+        if not history:
+            return None
+        # Look at last 4 user turns
+        user_turns = [h["content"] for h in reversed(history) if h.get("role") == "user"][:4]
+        # Concatenate recent user turns for context
+        combined = " ".join(user_turns)
+        for pat in self._USER_SUBSTANTIVE_RE:
+            if pat.search(combined):
+                # Return the most recent substantive turn
+                return combined.strip()
+        return None
+
+    def should_guardrail_delegate(self, ai_text: str, dialog_history: List[Dict[str, str]]) -> Tuple[bool, Optional[str]]:
+        """
+        Passive response guardrail: if AI gave an empty response but user asked for
+        something substantive, return (True, query_for_expert).
+        """
+        if not self.config.enabled:
+            return False, None
+        if not self.is_passive_response(ai_text):
+            return False, None
+        user_request = self.extract_user_request_from_history(dialog_history)
+        if not user_request:
+            return False, None
+        logger.info(f"[Guardrail] Passive AI response detected: '{ai_text[:50]}' — user requested: '{user_request[:80]}'")
+        return True, user_request

@@ -2505,6 +2505,14 @@ async def duplex_ws(ws: WebSocket):
                                 if expert_task and not expert_task.done():
                                     expert_task.cancel()
                                 expert_task = asyncio.create_task(_run_expert(q, prov_override))
+                            else:
+                                # 3. Passive response guardrail: AI said "Sure" / "Okay" but user asked for something real
+                                guardrail_should, guardrail_query = expert_supervisor.should_guardrail_delegate(turn_text, session_dialog_history)
+                                if guardrail_should and guardrail_query:
+                                    logger.info(f"[Guardrail] Auto-delegating to expert: AI='{turn_text[:40]}' → query='{guardrail_query[:80]}'")
+                                    if expert_task and not expert_task.done():
+                                        expert_task.cancel()
+                                    expert_task = asyncio.create_task(_run_expert(guardrail_query, None))
                     turn_has_injected_expert = False
             else:
                 model_speaking = True
@@ -2907,6 +2915,25 @@ async def duplex_ws(ws: WebSocket):
                 worker.duplex_stop()
                 await ws.send_json({"type": "stopped"})
                 break
+
+            elif msg_type == "user_speech":
+                user_text = msg.get("text", "").strip()
+                if user_text:
+                    logger.info(f"[Duplex] User speech received from client ASR: '{user_text[:80]}'")
+                    session_dialog_history.append({"role": "user", "content": user_text})
+                    if len(session_dialog_history) > 20:
+                        session_dialog_history = session_dialog_history[-20:]
+
+                    # Check for direct delegation from user utterance
+                    is_expert_running = expert_task and not expert_task.done()
+                    if expert_supervisor.is_enabled() and not is_expert_running:
+                        should_del, q, prov = expert_supervisor.detect_delegation_intent(user_text)
+                        if should_del:
+                            target_q = q or user_text
+                            logger.info(f"[Duplex] User speech triggered expert delegation: '{target_q[:80]}' (prov={prov})")
+                            if expert_task and not expert_task.done():
+                                expert_task.cancel()
+                            expert_task = asyncio.create_task(_run_expert(target_q, prov))
 
             elif msg_type == "ask_expert":
                 query = msg.get("query", "").strip()

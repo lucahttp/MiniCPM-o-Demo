@@ -1052,6 +1052,7 @@ async function startSession() {
 
         if (media) { media.stop(); media = null; }
         stopWaveformDrawing();
+        stopUserSpeechRecognition();
         mixerCtrl?.stopMixerMeters();
         if (captureNodeLive) {
             captureNodeLive.port.postMessage({ command: 'stop' });
@@ -1168,6 +1169,77 @@ function stopSession() {
 function toggleForceListen() { if (session) session.toggleForceListen(); }
 
 // ============================================================================
+// Web Speech Recognition (Real-time user transcription & instant delegation)
+// ============================================================================
+let speechRec = null;
+
+function startUserSpeechRecognition() {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+        console.log('[ASR] Web Speech API not supported in this browser');
+        return;
+    }
+    try {
+        if (speechRec) {
+            try { speechRec.stop(); } catch (_) {}
+            speechRec = null;
+        }
+        speechRec = new SpeechRec();
+        speechRec.continuous = true;
+        speechRec.interimResults = false;
+        
+        // Match language from system prompt
+        const sysPrompt = document.getElementById('systemPrompt')?.value || '';
+        const isEs = /español|spanish|hola|gracias|bueno|ayud/i.test(sysPrompt);
+        speechRec.lang = isEs ? 'es-AR' : 'en-US';
+
+        speechRec.onresult = (event) => {
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    const text = event.results[i][0].transcript.trim();
+                    if (text && session && session.running) {
+                        console.log('[ASR] User transcript:', text);
+                        addUserLog(text);
+                        if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+                            session.ws.send(JSON.stringify({
+                                type: 'user_speech',
+                                text: text,
+                                final: true,
+                            }));
+                        }
+                    }
+                }
+            }
+        };
+
+        speechRec.onerror = (event) => {
+            if (event.error !== 'no-speech' && event.error !== 'aborted') {
+                console.warn('[ASR] Speech recognition error:', event.error);
+            }
+        };
+
+        speechRec.onend = () => {
+            if (session && session.running && speechRec) {
+                try { speechRec.start(); } catch (_) {}
+            }
+        };
+
+        speechRec.start();
+        console.log('[ASR] Web Speech Recognition started, lang:', speechRec.lang);
+    } catch (e) {
+        console.warn('[ASR] Failed to start SpeechRecognition:', e);
+    }
+}
+
+function stopUserSpeechRecognition() {
+    if (speechRec) {
+        const r = speechRec;
+        speechRec = null;
+        try { r.stop(); } catch (_) {}
+    }
+}
+
+// ============================================================================
 // Microphone (Live mode — with Waveform AnalyserNode)
 // ============================================================================
 async function startMicrophone() {
@@ -1214,6 +1286,7 @@ async function startMicrophone() {
     };
 
     startWaveformDrawing();
+    startUserSpeechRecognition();
 }
 
 // ============================================================================
