@@ -47,11 +47,14 @@ _EXPLICIT_TRIGGERS = [
 _DELEGATE_TAG_REGEX = re.compile(r"\[(?:DELEGATE|EXPERT):\s*(.*?)\]", re.IGNORECASE)
 
 from .tools import ToolDispatcher
+from .parser import fc2dict, MiniCPMParser, resolve_ast_call
+from .audio_gate import AudioStreamGate, GateState, ToolCallEvent
+from .mcp_client import MCPClient, ToolCallResult
 
 class ExpertSupervisor:
-    """Orchestrates hybrid voice delegation to specialized frontier agents (AGY, Claude, MiniMax)."""
+    """Orchestrates hybrid voice delegation to specialized frontier agents (AGY, Claude, MiniMax) and MCP tools."""
 
-    def __init__(self, config: Optional[ExpertConfig] = None):
+    def __init__(self, config: Optional[ExpertConfig] = None, mcp_client: Optional[MCPClient] = None):
         self.config = config or ExpertConfig()
         self.providers: Dict[str, BaseExpertProvider] = {
             ExpertProvider.AGY.value: AgyExpertProvider(self.config.agy_path),
@@ -69,6 +72,15 @@ class ExpertSupervisor:
             ),
         }
         self.tool_dispatcher = ToolDispatcher()
+        self.mcp_client: Optional[MCPClient] = mcp_client
+
+    def set_mcp_client(self, client: MCPClient) -> None:
+        """Attach an active MCPClient to the supervisor."""
+        self.mcp_client = client
+
+    def create_audio_gate(self, sample_rate: int = 16000, mute_as_silence: bool = False) -> AudioStreamGate:
+        """Creates a new instance of AudioStreamGate."""
+        return AudioStreamGate(sample_rate=sample_rate, mute_as_silence=mute_as_silence)
 
     @staticmethod
     def claude_path_clean(path: str) -> str:
@@ -130,12 +142,33 @@ class ExpertSupervisor:
 
     def detect_tool_or_expert(self, text: str) -> Tuple[str, Optional[str], Optional[Dict[str, Any]]]:
         """
-        Detecta si hay una herramienta rápida o un experto.
+        Detecta si hay una herramienta rápida, una llamada MCP o un experto.
+        Soporta parser nativo (<|tool_call_start|>), XML (<function=...>) y legacy ([TOOL:...]).
         Retorna (tipo, nombre_herramienta_o_query, argumentos).
-        Tipo puede ser "TOOL", "EXPERT" o "NONE".
+        Tipo puede ser "TOOL", "MCP", "EXPERT" o "NONE".
         """
         if not text:
             return "NONE", None, None
+
+        # 1. Verificar si hay Native OpenBMB o XML tool call vía parser fc2dict
+        try:
+            _, native_calls = fc2dict(text)
+            if native_calls:
+                call = native_calls[0]
+                t_name = call.get("name", "tool")
+                t_args = call.get("arguments", {})
+                if t_name.lower() in ("expert", "delegate", "supervisor"):
+                    q = t_args.get("query") or t_args.get("__positional__") or text
+                    return "EXPERT", q, t_args
+                if hasattr(self.tool_dispatcher.registry, t_name):
+                    return "TOOL", t_name, t_args
+                if self.mcp_client:
+                    return "MCP", t_name, t_args
+                return "TOOL", t_name, t_args
+        except Exception as e:
+            logger.debug(f"[ExpertSupervisor] fc2dict parse check failed: {e}")
+
+        # 2. Fallback a tool_dispatcher para formato bracket [TOOL: ...] y [EXPERT: ...]
         return self.tool_dispatcher.detect_tool_or_expert(text)
 
     def execute_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
@@ -143,6 +176,35 @@ class ExpertSupervisor:
         Ejecuta y formatea la respuesta en 1 oración limpia lista para que MiniCPM-o la hable de inmediato.
         """
         return self.tool_dispatcher.execute_tool(tool_name, args)
+
+    async def execute_tool_async(self, tool_name: str, args: Dict[str, Any]) -> str:
+        """
+        Ejecuta una herramienta ya sea instantánea (<50ms), vía MCP o delegada al experto.
+        Formatea el resultado para voz natural.
+        """
+        if hasattr(self.tool_dispatcher.registry, tool_name):
+            ans = self.tool_dispatcher.execute_tool(tool_name, args)
+            if ans.startswith("[EXPERT:"):
+                q = ans[8:-1].strip()
+                res = await self.execute(q)
+                return res.get("text", "No pude obtener la respuesta del experto.")
+            return ans
+
+        if self.mcp_client and self.mcp_client.initialized:
+            try:
+                res: ToolCallResult = await self.mcp_client.call_tool(tool_name, args, timeout=self.config.timeout_seconds)
+                if res.is_error:
+                    return f"Hubo un error al ejecutar la herramienta {tool_name}: {res.text}"
+                return self.format_for_speech(res.text)
+            except Exception as e:
+                logger.error(f"[ExpertSupervisor] MCP tool execution error ({tool_name}): {e}", exc_info=True)
+                return f"Error al ejecutar la herramienta {tool_name} vía MCP."
+
+        # Fallback to general expert
+        query = f"Ejecuta la acción {tool_name} con parámetros {args}"
+        res = await self.execute(query)
+        return res.get("text", "Completé la consulta.")
+
 
     @staticmethod
     def clean_query_text(text: str) -> str:

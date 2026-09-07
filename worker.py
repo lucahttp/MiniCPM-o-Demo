@@ -2183,8 +2183,9 @@ async def duplex_ws(ws: WebSocket):
     model_speaking = False
     model_speak_chunks = 0
     barge_in_streak = 0
-    from core.expert import ExpertSupervisor, ExpertConfig, ExpertProvider
+    from core.expert import ExpertSupervisor, ExpertConfig, ExpertProvider, AudioStreamGate, GateState, ToolCallEvent
     expert_supervisor = ExpertSupervisor()
+    audio_gate = AudioStreamGate()
     expert_task: Optional[asyncio.Task] = None
     pending_expert_text: Optional[str] = None
     accumulated_turn_text: List[str] = []
@@ -2203,13 +2204,72 @@ async def duplex_ws(ws: WebSocket):
         except Exception:
             pass
 
+    async def _run_tool_call(event: ToolCallEvent):
+        """Ejecuta una llamada a herramienta (instantánea o MCP) con Audio Gating."""
+        nonlocal pending_expert_text, session_dialog_history, turn_has_injected_expert
+        tool_name = event.name
+        tool_args = event.arguments
+        is_expert = event.is_expert or tool_name.lower() in ("expert", "delegate", "supervisor")
+
+        try:
+            filler = expert_supervisor.get_filler_phrase()
+            audio_gate.start_verbal_bridging(filler)
+
+            await ws.send_json({
+                "type": "tool_status",
+                "status": "thinking",
+                "tool": tool_name,
+                "arguments": tool_args,
+                "filler": filler,
+                "earcon": "tool_start",
+                "gate_state": audio_gate.state.value,
+            })
+
+            if is_expert:
+                q = event.query or tool_args.get("query") or tool_args.get("__positional__") or event.raw
+                await _run_expert(q, event.provider)
+            else:
+                t0 = time.perf_counter()
+                ans = await expert_supervisor.execute_tool_async(tool_name, tool_args)
+                elapsed_ms = (time.perf_counter() - t0) * 1000
+
+                pending_expert_text = ans
+                turn_has_injected_expert = True
+                audio_gate.unmute_for_response(ans)
+
+                session_dialog_history.append({"role": "assistant", "content": ans})
+                await ws.send_json({
+                    "type": "tool_status",
+                    "status": "done",
+                    "tool": tool_name,
+                    "text": ans,
+                    "elapsed_ms": round(elapsed_ms, 1),
+                    "earcon": "tool_done",
+                    "gate_state": audio_gate.state.value,
+                })
+        except asyncio.CancelledError:
+            logger.info(f"[Duplex] Tool call '{tool_name}' cancelled")
+            audio_gate.reset()
+            try:
+                await ws.send_json({"type": "tool_status", "status": "cancelled", "tool": tool_name})
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"[Duplex] Error running tool call '{tool_name}': {e}", exc_info=True)
+            audio_gate.reset()
+            try:
+                await ws.send_json({"type": "tool_status", "status": "error", "tool": tool_name, "error": str(e)})
+            except Exception:
+                pass
+
     async def _run_expert(query_text: str, prov_override: Optional[str] = None):
         nonlocal pending_expert_text, session_dialog_history, turn_has_injected_expert
         target_prov = prov_override or expert_supervisor.config.provider.value
         try:
-            # Elegir frase de relleno ("let me think...", "im doing some research...") según el idioma
+            # Elegir frase de relleno según el idioma
             is_es = any(c in query_text.lower() for c in ["¿", "á", "é", "í", "ó", "ú", "ñ", "que", "como", "sobre", "cual", "cuanto", "por que"])
             filler_phrase = expert_supervisor.get_filler_phrase(lang="es" if is_es else "en")
+            audio_gate.start_verbal_bridging(filler_phrase)
 
             # Notificar al cliente de que el experto está procesando
             await ws.send_json({
@@ -2218,6 +2278,8 @@ async def duplex_ws(ws: WebSocket):
                 "query": query_text,
                 "provider": target_prov,
                 "filler": filler_phrase,
+                "earcon": "tool_start",
+                "gate_state": audio_gate.state.value,
             })
             # Pasar los últimos 8 turnos para mantener contexto semántico y memoria
             context_history = session_dialog_history[-8:] if session_dialog_history else None
@@ -2229,6 +2291,7 @@ async def duplex_ws(ws: WebSocket):
             if expert_res.get("success"):
                 pending_expert_text = expert_res["text"]
                 turn_has_injected_expert = True
+                audio_gate.unmute_for_response(expert_res["text"])
                 if not (session_dialog_history and session_dialog_history[-1].get("content") == query_text):
                     session_dialog_history.append({"role": "user", "content": query_text})
                 session_dialog_history.append({"role": "assistant", "content": expert_res["text"]})
@@ -2240,23 +2303,29 @@ async def duplex_ws(ws: WebSocket):
                     "raw_text": expert_res.get("raw_text", ""),
                     "elapsed_ms": expert_res.get("elapsed_ms", 0),
                     "query": query_text,
+                    "earcon": "tool_done",
+                    "gate_state": audio_gate.state.value,
                 })
             else:
+                audio_gate.reset()
                 await ws.send_json({
                     "type": "expert_status",
                     "status": "error",
                     "provider": expert_res["provider"],
                     "error": expert_res.get("error", "Error desconocido"),
                     "query": query_text,
+                    "gate_state": audio_gate.state.value,
                 })
         except asyncio.CancelledError:
             logger.info("[Duplex] Expert task cancelled")
+            audio_gate.reset()
             try:
                 await ws.send_json({"type": "expert_status", "status": "cancelled", "provider": target_prov})
             except Exception:
                 pass
         except Exception as e:
             logger.error(f"[Duplex] Error running expert: {e}", exc_info=True)
+            audio_gate.reset()
             try:
                 await ws.send_json({"type": "expert_status", "status": "error", "error": str(e), "provider": target_prov})
             except Exception:
@@ -2335,6 +2404,7 @@ async def duplex_ws(ws: WebSocket):
             logger.info(f"[Duplex] User barge-in interrupt (audio_rms={audio_rms:.4f}, streak={barge_in_streak})")
             barge_in_streak = 0
             pending_expert_text = None
+            audio_gate.reset()
             if expert_task and not expert_task.done():
                 expert_task.cancel()
                 try:
@@ -2356,6 +2426,7 @@ async def duplex_ws(ws: WebSocket):
         elif user_is_speaking:
             # 用户正在发言
             pending_expert_text = None
+            audio_gate.reset()
             if expert_task and not expert_task.done():
                 expert_task.cancel()
                 try:
@@ -2416,6 +2487,7 @@ async def duplex_ws(ws: WebSocket):
             text_to_inject = pending_expert_text
             pending_expert_text = None
             turn_has_injected_expert = True
+            audio_gate.on_prefill_injected()
             logger.info(f"[Duplex] Injecting pending expert text to MiniCPM-o ({len(text_to_inject)} chars): '{text_to_inject[:60]}...'")
             sps = 4.0
             lps = 0.0
@@ -2448,6 +2520,22 @@ async def duplex_ws(ws: WebSocket):
 
             result, prefill_ms, prefill_cost, kv_cache_len = await asyncio.to_thread(_duplex_step)
 
+            # Audio Gating: procesar chunks en tiempo real para silenciar sintaxis técnica y código
+            if not result.is_listen:
+                gate_res = audio_gate.process_chunk(
+                    text=result.text,
+                    audio_data=result.audio_data,
+                )
+                result.audio_data = gate_res.audio_data
+                result.text = gate_res.filtered_text
+
+                # Al detectar tool call en el stream: activa gate, silencia audio y dispara tarea
+                if gate_res.tool_event:
+                    logger.info(f"[AudioGate] Native tool call detected in stream: {gate_res.tool_event.name} -> dispatching background task")
+                    if expert_task and not expert_task.done():
+                        expert_task.cancel()
+                    expert_task = asyncio.create_task(_run_tool_call(gate_res.tool_event))
+
             if result.is_listen:
                 model_speaking = False
                 model_speak_chunks = 0
@@ -2462,31 +2550,18 @@ async def duplex_ws(ws: WebSocket):
                     # Si esta locución fue una inyección del experto/filler, o si ya hay un experto corriendo, no delegar
                     is_expert_running = expert_task and not expert_task.done()
                     if expert_supervisor.is_enabled() and not turn_has_injected_expert and not is_expert_running:
-                        # 1. Verificar si hay Tool rápida local (< 50ms) o tag [EXPERT: ...]
+                        # 1. Verificar si hay Tool rápida local (< 50ms), MCP o tag [EXPERT: ...]
                         tool_type, tool_target, tool_args = expert_supervisor.detect_tool_or_expert(turn_text)
-                        if tool_type == "TOOL":
-                            ans = expert_supervisor.execute_tool(tool_target, tool_args or {})
-                            if ans.startswith("[EXPERT:"):
-                                q = ans[8:-1].strip()
-                                logger.info(f"[ToolDispatcher] Tool {tool_target} fallback to expert: '{q[:80]}'")
-                                if expert_task and not expert_task.done():
-                                    expert_task.cancel()
-                                expert_task = asyncio.create_task(_run_expert(q, None))
-                            else:
-                                logger.info(f"[ToolDispatcher] Instant tool '{tool_target}' executed (< 50ms): '{ans}'")
-                                pending_expert_text = ans
-                                session_dialog_history.append({"role": "assistant", "content": ans})
-                                try:
-                                    asyncio.create_task(ws.send_json({
-                                        "type": "expert_status",
-                                        "status": "done",
-                                        "provider": f"tool:{tool_target}",
-                                        "text": ans,
-                                        "elapsed_ms": 1.0,
-                                        "query": f"{tool_target}({tool_args})",
-                                    }))
-                                except Exception:
-                                    pass
+                        if tool_type in ("TOOL", "MCP"):
+                            t_event = ToolCallEvent(
+                                name=tool_target,
+                                arguments=tool_args or {},
+                                raw=turn_text,
+                                is_expert=False,
+                            )
+                            if expert_task and not expert_task.done():
+                                expert_task.cancel()
+                            expert_task = asyncio.create_task(_run_tool_call(t_event))
                         elif tool_type == "EXPERT":
                             q = tool_target
                             logger.info(f"[ExpertSupervisor] Delegating to expert (tag): '{q[:80]}'")
@@ -2909,6 +2984,7 @@ async def duplex_ws(ws: WebSocket):
                 # Stop 后立即进入非活跃（LOADING）状态，避免新会话被过早接入
                 worker.state.status = WorkerStatus.LOADING
                 worker.state.duplex_pause_time = None
+                audio_gate.reset()
                 worker.duplex_stop()
                 await ws.send_json({"type": "stopped"})
                 break
@@ -2951,6 +3027,7 @@ async def duplex_ws(ws: WebSocket):
     except Exception as e:
         logger.error(f"Duplex WebSocket error: {e}", exc_info=True)
     finally:
+        audio_gate.reset()
         if expert_task and not expert_task.done():
             expert_task.cancel()
             try:
