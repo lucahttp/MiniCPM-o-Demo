@@ -2287,6 +2287,7 @@ async def duplex_ws(ws: WebSocket):
                 query=query_text,
                 history=context_history,
                 provider_override=prov_override,
+                session_id=session_id,
             )
             if expert_res.get("success"):
                 pending_expert_text = expert_res["text"]

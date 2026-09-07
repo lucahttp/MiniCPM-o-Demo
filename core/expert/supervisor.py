@@ -56,23 +56,57 @@ class ExpertSupervisor:
 
     def __init__(self, config: Optional[ExpertConfig] = None, mcp_client: Optional[MCPClient] = None):
         self.config = config or ExpertConfig()
-        self.providers: Dict[str, BaseExpertProvider] = {
-            ExpertProvider.AGY.value: AgyExpertProvider(self.config.agy_path),
-            ExpertProvider.CLAUDE.value: ClaudeExpertProvider(self.claude_path_clean(self.config.claude_path)),
-            ExpertProvider.MINIMAX.value: MiniMaxExpertProvider(
-                api_key=self.config.minimax_api_key,
-                group_id=self.config.minimax_group_id,
-                model=self.config.minimax_model,
-                api_base=self.config.minimax_api_base,
-            ),
-            ExpertProvider.OPENAI.value: OpenAIExpertProvider(
-                api_key=self.config.openai_api_key,
-                model=self.config.openai_model,
-                api_base=self.config.openai_api_base or "https://api.openai.com/v1",
-            ),
-        }
         self.tool_dispatcher = ToolDispatcher()
         self.mcp_client: Optional[MCPClient] = mcp_client
+
+        # Provider initialization
+        agy_provider = AgyExpertProvider(
+            agy_path=self.config.agy_path,
+            default_project=self.config.agy_default_project,
+        )
+        minimax_provider = MiniMaxExpertProvider(
+            api_key=self.config.minimax_api_key,
+            group_id=self.config.minimax_group_id,
+            model=self.config.minimax_model,
+            api_base=self.config.minimax_api_base,
+        )
+        openai_provider = OpenAIExpertProvider(
+            api_key=self.config.openai_api_key or self.config.slow_loop_api_key,
+            model=self.config.openai_model,
+            api_base=self.config.openai_api_base or "https://api.openai.com/v1",
+        )
+        groq_provider = OpenAIExpertProvider(
+            api_key=self.config.groq_api_key or self.config.slow_loop_api_key,
+            model=self.config.groq_model,
+            api_base=self.config.groq_api_base,
+        )
+
+        # Wire Slow Loop Brain tool executor to AGY and local tools
+        async def _slow_loop_tool_executor(fn_name: str, args: Dict[str, Any], session_id: Optional[str] = None) -> str:
+            if fn_name == "delegate_to_agy":
+                task = args.get("task", "") or str(args)
+                project = args.get("project_dir") or self.config.agy_default_project
+                logger.info(f"[SlowLoopBrain] Delegating to AGY: '{task[:80]}' (session={session_id}, project={project})")
+                return await agy_provider.execute(
+                    query=task,
+                    timeout=self.config.timeout_seconds,
+                    session_id=session_id,
+                    project_dir=project,
+                )
+            # Local instant tools: calculator, time_date, filesystem
+            logger.info(f"[SlowLoopBrain] Executing local tool '{fn_name}'")
+            return await self.execute_tool_async(fn_name, args)
+
+        groq_provider.set_tool_executor(_slow_loop_tool_executor)
+        openai_provider.set_tool_executor(_slow_loop_tool_executor)
+
+        self.providers: Dict[str, BaseExpertProvider] = {
+            ExpertProvider.AGY.value: agy_provider,
+            ExpertProvider.CLAUDE.value: ClaudeExpertProvider(self.claude_path_clean(self.config.claude_path)),
+            ExpertProvider.MINIMAX.value: minimax_provider,
+            ExpertProvider.OPENAI.value: openai_provider,
+            ExpertProvider.GROQ.value: groq_provider,
+        }
 
     def set_mcp_client(self, client: MCPClient) -> None:
         """Attach an active MCPClient to the supervisor."""
@@ -123,6 +157,8 @@ class ExpertSupervisor:
             provider_override = "claude"
         elif "minimax" in clean:
             provider_override = "minimax"
+        elif "groq" in clean:
+            provider_override = "groq"
 
         for pattern in _EXPLICIT_TRIGGERS:
             if re.search(pattern, clean):
@@ -272,11 +308,19 @@ class ExpertSupervisor:
                 return resolved
         return query
 
+    def get_agy_conversation_id(self, session_id: str) -> Optional[str]:
+        """Returns the active AGY conversation ID for a voice session."""
+        agy = self.providers.get(ExpertProvider.AGY.value)
+        if hasattr(agy, "get_conversation_id"):
+            return agy.get_conversation_id(session_id)
+        return None
+
     async def execute(
         self,
         query: str,
         history: Optional[List[Dict[str, str]]] = None,
         provider_override: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Execute query with expert and return result."""
         t0 = time.perf_counter()
@@ -285,12 +329,22 @@ class ExpertSupervisor:
         resolved_query = self.resolve_expert_query(query, history)
 
         try:
-            raw_result = await provider.execute(
-                query=resolved_query,
-                history=history,
-                system_prompt=self.config.expert_system_prompt,
-                timeout=self.config.timeout_seconds,
-            )
+            exec_kwargs: Dict[str, Any] = {
+                "query": resolved_query,
+                "history": history,
+                "system_prompt": self.config.expert_system_prompt,
+                "timeout": self.config.timeout_seconds,
+            }
+            if session_id:
+                exec_kwargs["session_id"] = session_id
+
+            try:
+                raw_result = await provider.execute(**exec_kwargs)
+            except TypeError:
+                # If provider doesn't accept session_id argument
+                exec_kwargs.pop("session_id", None)
+                raw_result = await provider.execute(**exec_kwargs)
+
             elapsed_ms = (time.perf_counter() - t0) * 1000
             clean_speech = self.format_for_speech(raw_result)
             return {
