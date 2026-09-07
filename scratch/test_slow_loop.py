@@ -182,12 +182,26 @@ class TestSlowLoopBrainAndSessions(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(should_del, "Multi-turn follow-up should trigger delegation")
         self.assertEqual(q, "search for a bakeries in Montessori")
 
-    def test_passive_variations(self):
-        """Test various passive AI acknowledgments are recognized."""
+    def test_wildcats_inquiry_and_passive_help_guardrail(self):
+        """Test 'Yes, I can help you with that.' guardrail and 'know about wildcats' intent."""
         config = ExpertConfig()
         supervisor = ExpertSupervisor(config)
-        for phrase in ["Sure thing.", "Sure thing", "Sure.", "Ok", "Okay.", "No problem", "Por supuesto.", "Dale."]:
-            self.assertTrue(supervisor.is_passive_response(phrase), f"Failed on '{phrase}'")
+        user_msg = "can you help me to know a little bit more about A Wildcats around the world"
+        
+        # 1. Direct intent detection
+        should_del, q, prov = supervisor.detect_delegation_intent(user_msg)
+        self.assertTrue(should_del, "Inquiry about wildcats should directly trigger delegation")
+        
+        # 2. Passive guardrail
+        history = [
+            {"role": "user", "content": "really good really good"},
+            {"role": "user", "content": user_msg},
+        ]
+        ai_passive = "Yes, I can help you with that."
+        self.assertTrue(supervisor.is_passive_response(ai_passive))
+        should_guard, g_q = supervisor.should_guardrail_delegate(ai_passive, history)
+        self.assertTrue(should_guard)
+        self.assertEqual(g_q, user_msg)
 
 
 if __name__ == "__main__":

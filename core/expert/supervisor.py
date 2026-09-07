@@ -44,6 +44,13 @@ _EXPLICIT_TRIGGERS = [
     r"\b(d[eé]jame|voy\s+a|puedo)\s+(buscar|averiguar)\b",
     r"\b(specifications|specs|especificaciones|manual|datasheet)\s+(of|for|de|para)?\b",
 
+    # General knowledge, information, and inquiry requests (English & Spanish)
+    r"\b(can\s+you\s+|could\s+you\s+|please\s+)?(help\s+me\s+(to\s+)?)?(know|learn|understand|find\s+out|hear)\s+(a\s+little\s+bit\s+)?(more\s+)?about\b",
+    r"\b(tell\s+me|give\s+me\s+info|explain|what\s+do\s+you\s+know)\s+(a\s+little\s+bit\s+)?(more\s+)?(about|on)?\b",
+    r"\b(i('d|\s+would|\s+want\s+to)\s+(like\s+to\s+)?(know|learn|hear)\s+(a\s+little\s+bit\s+)?(more\s+)?about)\b",
+    r"\b(ay[uú]dame\s+a\s+(saber|conocer|entender|aprender)|quiero\s+saber\s+m[aá]s?\s+sobre|cont[aá]me\s+(sobre|de)|decime\s+(sobre|de)|hablame\s+(sobre|de))\b",
+    r"\b(qu[eé]\s+(sabes|sab[eé]s|me\s+pod[eé]s\s+contar|me\s+puedes\s+decir)\s+(sobre|de))\b",
+
     # Complex programming / creation requests that need frontier expert
     r"\b(develop|build|create|code|program)\s+(a\s+|an\s+)?(website|web\s+app|application|script|program|backend|frontend)\b",
     
@@ -213,9 +220,22 @@ class ExpertSupervisor:
                     logger.info(f"[ExpertSupervisor] Multi-turn follow-up detected: assistant='{last_asst[:40]}...', user='{text}' -> query='{q}'")
                     return True, q, provider_override
 
-        # 4. If auto_delegate is enabled and query is substantive (> 30 chars and contains question marks or inquiry)
+        # 4. If auto_delegate is enabled and query is substantive
         if self.config.auto_delegate:
-            is_question = "?" in text or "¿" in text or clean.startswith(("qué", "que", "cómo", "como", "por qué", "porque", "cuál", "cual", "quién", "quien", "how", "what", "why", "where", "who"))
+            is_question = (
+                "?" in text
+                or "¿" in text
+                or clean.startswith((
+                    "qué", "que", "cómo", "como", "por qué", "porque", "cuál", "cual", "quién", "quien",
+                    "how", "what", "why", "where", "who", "which",
+                    "can you", "could you", "would you", "tell me", "do you know",
+                    "puedes", "podrías", "podrias", "sabes", "me puedes", "me podrías"
+                ))
+                or any(phrase in clean for phrase in [
+                    "tell me about", "know about", "learn about", "information about",
+                    "saber sobre", "contame sobre", "decime sobre", "informacion sobre", "información sobre"
+                ])
+            )
             is_longer = len(clean.split()) >= 4
             is_not_small_talk = not any(w in clean for w in ["hola", "buen dia", "buenas", "chau", "adios", "gracias", "ok", "dale", "si", "no"])
             if is_question and is_longer and is_not_small_talk:
@@ -444,11 +464,18 @@ class ExpertSupervisor:
     # ── Passive Response Guardrail ──────────────────────────────────────────
     # Patterns that match empty/passive AI responses that don't actually help
     _PASSIVE_PATTERNS = [
-        r"^(sure(\s+thing)?|ok(ay)?|alright|of course|certainly|sounds good|yeah|yes|great|got it|right|no problem|will do|you got it)[\s,!.]*$",
-        r"^(sure(\s+thing)?|ok(ay)?|alright|of course|certainly),?\s+(let'?s\s+(do|talk|discuss|get|try)|i\s+can\s+help|that'?s\s+(interesting|great|cool|nice))",
-        r"^(okay|ok|sure(\s+thing)?|yeah),?\s+(let\s+me|i('ll|\s+will)|i\s+can)\s+(search|look|find|check)",
-        r"^(bueno|dale|claro|si|por supuesto|de acuerdo|no hay problema|entendido|perfecto)[\s,!.]*$",
-        r"^(claro|por supuesto|de acuerdo),?\s+(hablemos|vamos|hagamos)",
+        # Standalone acknowledgments
+        r"^(sure(\s+thing)?|ok(ay)?|alright|of course|certainly|sounds good|yeah|yes|yep|great|got it|right|no problem|will do|you got it)[\s,!.]*$",
+        # Promises/offers to help with no content: "Yes, I can help you with that", "I can help with that", "Of course, I can help you"
+        r"^(yes|yeah|sure(\s+thing)?|ok(ay)?|of course|certainly|definitely|absolutely|great)?[\s,!.]*\b(i\s+can\s+help|i('d|\s+would)\s+(love|be\s+happy)\s+to\s+help|i'll\s+help|let\s+me\s+help)\b.*$",
+        # Conversational openers without substantive info: "Sure, let's talk about that", "Of course, let's discuss"
+        r"^(sure(\s+thing)?|ok(ay)?|alright|of course|certainly|yes|yeah),?\s+(let'?s\s+(do|talk|discuss|get|try|see)|that'?s\s+(interesting|great|cool|nice))",
+        # Promises to search/check without actually giving answers
+        r"^(okay|ok|sure(\s+thing)?|yeah|yes),?\s+(let\s+me|i('ll|\s+will)|i\s+can)\s+(search|look|find|check)",
+        # Spanish passive phrases
+        r"^(bueno|dale|claro|si|sí|por supuesto|de acuerdo|no hay problema|entendido|perfecto)[\s,!.]*$",
+        r"^(s[ií]|claro|por supuesto|seguro)?[\s,!.]*\b(te\s+puedo\s+ayudar|puedo\s+ayudarte|con\s+gusto\s+te\s+ayudo)\b.*$",
+        r"^(claro|por supuesto|de acuerdo|bueno),?\s+(hablemos|vamos|hagamos|veamos)",
         r"\b(let\s+me\s+search\s+for\s+you|i\s+can\s+search\s+for\s+you)\b",
         r"^(i'?m\s+afraid\s+i\s+can'?t|i\s+can'?t\s+do\s+that)",
     ]
@@ -482,8 +509,14 @@ class ExpertSupervisor:
         if not history:
             return None
         # Look at last 4 user turns in chronological order
-        user_turns = [h["content"] for h in history if h.get("role") == "user"][-4:]
-        # Concatenate recent user turns for context
+        raw_user_turns = [h["content"] for h in history if h.get("role") == "user"][-4:]
+        user_turns = []
+        for u in raw_user_turns:
+            u_clean = u.strip()
+            if not any(re.search(p, u_clean, re.I) for p in self._SMALL_TALK_PATTERNS):
+                user_turns.append(u_clean)
+        if not user_turns:
+            user_turns = raw_user_turns
         combined = " ".join(user_turns)
         for pat in self._USER_SUBSTANTIVE_RE:
             if pat.search(combined):
