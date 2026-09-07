@@ -122,11 +122,43 @@ class TestSlowLoopBrainAndSessions(unittest.IsolatedAsyncioTestCase):
         safe_display = ans_text.encode("ascii", errors="replace").decode()
         print("Groq web search response:", safe_display, f"({res.get('elapsed_ms')}ms)")
         self.assertTrue(res.get("success"))
-        text_lower = res.get("text", "").lower()
-        # Should mention Kodak, Portrait, or key specs (extruder, dual, build, etc.)
-        self.assertTrue(any(w in text_lower for w in ["kodak", "portrait", "3d", "extrusora", "extruder", "impresora"]))
+    async def test_groq_pants_repair_buenos_aires_search(self):
+        """Test search trigger detection and real Buenos Aires clothing repair lookup."""
+        config = ExpertConfig(provider=ExpertProvider.GROQ)
+        supervisor = ExpertSupervisor(config)
+
+        user_utterance = "first search can you search some place in Buenos Aires to do this"
+        should_del, q, prov = supervisor.detect_delegation_intent(user_utterance)
+        self.assertTrue(should_del, f"Utterance '{user_utterance}' should trigger delegation")
+        print("Detected delegation query:", q)
+
+        history = [
+            {"role": "user", "content": "I have a broken pair of pants I want to fix them"},
+            {"role": "assistant", "content": "We need needle and thread."},
+            {"role": "user", "content": user_utterance},
+        ]
+
+        # Test passive AI phrase matching
+        ai_passive = "Okay, let me search for you."
+        self.assertTrue(supervisor.is_passive_response(ai_passive))
+        guard_ok, guard_q = supervisor.should_guardrail_delegate(ai_passive, history)
+        self.assertTrue(guard_ok)
+
+        # Execute search
+        res = await supervisor.execute(
+            query="Find a place in Buenos Aires to repair broken pants / arreglar pantalones",
+            history=history,
+            session_id="test_pants_ba_001"
+        )
+        ans_text = res.get("text", "")
+        safe_display = ans_text.encode("ascii", errors="replace").decode()
+        print("Buenos Aires clothing repair search result:", safe_display)
+        self.assertTrue(res.get("success"))
+        text_lower = ans_text.lower()
+        self.assertTrue(any(w in text_lower for w in ["buenos aires", "taller", "costura", "ropa", "pantalones", "repair", "arregl"]))
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

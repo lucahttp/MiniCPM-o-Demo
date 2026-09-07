@@ -2774,10 +2774,11 @@ async def duplex_ws(ws: WebSocket):
 
                 if expert_supervisor and expert_supervisor.is_enabled():
                     expert_guide = (
-                        " You have access to a specialized background research expert. "
-                        "When asked to research, look something up, search the web, or consult the expert, "
-                        "briefly acknowledge that you will check with the expert (e.g. 'Sure, let me look that up with the expert' "
-                        "or 'Déjame consultar al experto') so the expert can handle it."
+                        " You have access to a real-time background web search expert. "
+                        "When asked to search, find places, businesses, shops, addresses, prices, or technical specifications, "
+                        "NEVER invent or hallucinate addresses or shops yourself. "
+                        "Briefly acknowledge: 'Sure, let me check that with the expert' or 'Déjame consultar al experto' "
+                        "so the search engine can look it up in real time."
                     )
                     if expert_guide.strip() not in system_prompt:
                         system_prompt = system_prompt.rstrip() + expert_guide

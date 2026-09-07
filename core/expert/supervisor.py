@@ -33,9 +33,15 @@ _EXPLICIT_TRIGGERS = [
     r"\b(call\s+the\s+expert|call\s+the\s+supervisor|delegate\s+to\s+the\s+expert|delayed\s+to\s+the\s+expert)\b",
     r"\b(ask(ing)?|consult(ing)?)\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax|groq)\b",
 
-    # Internet / web search / specifications requests
+    # Internet / web search / places & business lookups / specifications
     r"\b(search|look\s*up|find)\s+(across|on|in)?\s*(the\s+)?(internet|web|online)\b",
-    r"\b(busc[aá](r)?|averigu[aá](r)?)\s+(en\s+)?(internet|la\s+web|en\s+l[ií]nea)\b",
+    r"\b(can\s+you\s+|could\s+you\s+|please\s+)?(search|look\s*up)\b",
+    r"\b(search\s+it|search\s+for\s+it|look\s+it\s+up|search\s+some\s+place|search\s+a\s+place)\b",
+    r"\b(where\s+(can\s+i|to)\s+(find|get|buy|repair|fix|take))\b",
+    r"\b(busc[aá](r|me|lo|la)?|averigu[aá](r|me|lo|la)?)\b",
+    r"\b(d[oó]nde\s+(puedo|queda|hay|conseguir|arreglar|reparar|comprar))\b",
+    r"\b(let\s+me|i('ll|\s+will)|i\s+can)\s+(search|look\s*up|find)\b",
+    r"\b(d[eé]jame|voy\s+a|puedo)\s+(buscar|averiguar)\b",
     r"\b(specifications|specs|especificaciones|manual|datasheet)\s+(of|for|de|para)?\b",
 
     # Complex programming / creation requests that need frontier expert
@@ -283,6 +289,8 @@ class ExpertSupervisor:
         r"^(can\s+you\s+)?(do|search|find|check|look\s*up)\s+(it|that|this)[\s.!?,]*$",
         r"^(okay\s+|ok\s+)?(can\s+you\s+)?do\s+it[\s.!?,]*$",
         r"^(puedes|podes|hacelo|buscalo|fijate|dale|averigualo)[\s.!?,]*$",
+        r"\b(let\s+me|i('ll|\s+will)|i\s+can)\s+(search|look\s*up)\b",
+        r"\bsearch\s+(it|for\s+it|for\s+you)\b",
         r"^where\s+(are|is)\s+(them|it|the\s+calculation)",
         r"^no\s+i\s+mean\s+",
     ]
@@ -400,6 +408,9 @@ class ExpertSupervisor:
     _PASSIVE_PATTERNS = [
         r"^(sure|ok(ay)?|alright|of course|certainly|sounds good|yeah|yes|great|got it|right)[\s,!.]*$",
         r"^(sure|ok(ay)?|alright|of course|certainly),?\s+(let'?s\s+(do|talk|discuss|get|try)|i\s+can\s+help|that'?s\s+(interesting|great|cool|nice))",
+        r"^(okay|ok|sure|yeah),?\s+(let\s+me|i('ll|\s+will)|i\s+can)\s+(search|look|find|check)",
+        r"^(bueno|dale|claro|si),?\s+(d[eé]jame|voy\s+a|puedo)\s+(buscar|averiguar|fijarme)",
+        r"\b(let\s+me\s+search\s+for\s+you|i\s+can\s+search\s+for\s+you)\b",
         r"^(i'?m\s+afraid\s+i\s+can'?t|i\s+can'?t\s+do\s+that)",
         r"^(claro|por supuesto|de acuerdo|okey|seguro|bueno|dale|bien)[\s,!.]*$",
         r"^(claro|por supuesto|de acuerdo),?\s+(hablemos|vamos|hagamos)",
@@ -410,7 +421,7 @@ class ExpertSupervisor:
     _USER_SUBSTANTIVE_PATTERNS = [
         r"\b(help|develop|build|create|make|code|program|design|calculate|compute|search|find|explain|tell\s+me|show\s+me|can\s+you)\b",
         r"\b(ayud|desarroll|constru|cre[aá]|progra|diseñ|calcul|busc|explic|dime|muestr|pued[eo]s)\b",
-        r"\b(website|app|application|project|system|tool|page|database|printer|impresora|specs|specifications|hardware)\b",
+        r"\b(website|app|application|project|system|tool|page|database|printer|impresora|specs|specifications|hardware|pants|pantalones|ropa|clothes|needle|aguja)\b",
         r"\b(expert|supervisor|agy|claude|minimax|groq|delegate|delega)\b",
         r"\b(call\s+the\s+expert|llam[aá]\s+al\s+experto|consult|delegat?e?|pedi[rl]e)\b",
     ]
@@ -421,13 +432,12 @@ class ExpertSupervisor:
         clean = ai_text.strip().rstrip(".")
         if not clean:
             return True
-        # Short response (< 12 words) that matches passive patterns
-        words = clean.split()
-        if len(words) > 15:
-            return False  # Longer responses are probably substantive
         for pat in self._PASSIVE_RE:
             if pat.search(clean):
                 return True
+        words = clean.split()
+        if len(words) > 15:
+            return False  # Longer responses are probably substantive
         return False
 
     def extract_user_request_from_history(self, history: List[Dict[str, str]]) -> Optional[str]:
