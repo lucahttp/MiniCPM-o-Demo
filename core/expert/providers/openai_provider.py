@@ -248,6 +248,7 @@ class OpenAIExpertProvider(BaseExpertProvider):
                 "messages": messages,
                 "temperature": 0.3,
                 "max_tokens": 384,
+                "tools": SLOW_LOOP_TOOLS,
             }
             logger.info(f"[Expert:SlowLoop] Sending follow-up for voice synthesis after tool execution...")
             followup_resp = await client.post(url, headers=headers, json=followup_payload)

@@ -157,6 +157,38 @@ class TestSlowLoopBrainAndSessions(unittest.IsolatedAsyncioTestCase):
         text_lower = ans_text.lower()
         self.assertTrue(any(w in text_lower for w in ["buenos aires", "taller", "costura", "ropa", "pantalones", "repair", "arregl"]))
 
+    def test_sure_thing_passive_guardrail(self):
+        """Test guardrail detects 'Sure thing.' when user previously requested a search."""
+        config = ExpertConfig()
+        supervisor = ExpertSupervisor(config)
+        history = [
+            {"role": "user", "content": "can you help me to search"},
+            {"role": "assistant", "content": "Sure thing—what would you like me to look up for you?"},
+            {"role": "user", "content": "a bakeries in Montessori"},
+        ]
+        should, q = supervisor.should_guardrail_delegate("Sure thing.", history)
+        self.assertTrue(should, "Passive guardrail should catch 'Sure thing.'")
+        self.assertIn("bakeries in Montessori", q)
+
+    def test_multi_turn_followup_detection(self):
+        """Test detect_delegation_intent recognizes user answering an assistant clarifying question."""
+        config = ExpertConfig()
+        supervisor = ExpertSupervisor(config)
+        history = [
+            {"role": "user", "content": "can you help me to search"},
+            {"role": "assistant", "content": "Sure thing—what would you like me to look up for you?"},
+        ]
+        should_del, q, prov = supervisor.detect_delegation_intent("a bakeries in Montessori", history)
+        self.assertTrue(should_del, "Multi-turn follow-up should trigger delegation")
+        self.assertEqual(q, "search for a bakeries in Montessori")
+
+    def test_passive_variations(self):
+        """Test various passive AI acknowledgments are recognized."""
+        config = ExpertConfig()
+        supervisor = ExpertSupervisor(config)
+        for phrase in ["Sure thing.", "Sure thing", "Sure.", "Ok", "Okay.", "No problem", "Por supuesto.", "Dale."]:
+            self.assertTrue(supervisor.is_passive_response(phrase), f"Failed on '{phrase}'")
+
 
 if __name__ == "__main__":
     unittest.main()

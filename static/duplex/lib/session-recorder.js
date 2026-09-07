@@ -89,7 +89,9 @@ export class SessionRecorder {
     pushRight(samples, sampleRate, timestamp) {
         if (!this._recording || this._paused) return;
         const resampled = resampleAudio(samples, sampleRate, this._inputSR);
-        const elapsedMs = timestamp - this._startTime;
+        const elapsedMs = (timestamp && timestamp > this._startTime)
+            ? (timestamp - this._startTime)
+            : (performance.now() - this._startTime);
         const arrivalOffset = Math.max(0, Math.floor(elapsedMs / 1000 * this._inputSR));
         const offset = Math.max(arrivalOffset, this._rightNextOffset);
         this._rightEntries.push({ offset, data: resampled });

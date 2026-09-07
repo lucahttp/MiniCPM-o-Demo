@@ -145,9 +145,14 @@ class ExpertSupervisor:
             return self.providers[ExpertProvider.AGY.value]
         return provider
 
-    def detect_delegation_intent(self, text: str) -> Tuple[bool, Optional[str], Optional[str]]:
+    def detect_delegation_intent(
+        self,
+        text: str,
+        dialog_history: Optional[List[Dict[str, str]]] = None,
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
         """
         Detect if text contains delegation tags or complex inquiry.
+        Also handles multi-turn follow-ups when previous assistant turn asked a clarifying question.
         Returns (should_delegate, extracted_query, optional_provider_override)
         """
         if not self.config.enabled or not text:
@@ -159,7 +164,7 @@ class ExpertSupervisor:
             query = tag_match.group(1).strip()
             return True, query, None
 
-        # 2. Check for explicit trigger phrases
+        # 2. Check for explicit trigger phrases in current text
         clean = text.lower().strip()
         provider_override = None
         if "agy" in clean:
@@ -176,7 +181,39 @@ class ExpertSupervisor:
                 q = self.clean_query_text(text)
                 return True, q, provider_override
 
-        # 3. If auto_delegate is enabled and query is substantive (> 30 chars and contains question marks or inquiry)
+        # 3. Multi-turn follow-up detection:
+        # If dialog_history shows the assistant recently asked what to search or for clarification
+        # (e.g. "what would you like me to look up for you?"), then the user's substantive reply
+        # (e.g. "a bakeries in Montessori") should be treated as the search topic!
+        if dialog_history:
+            last_asst = None
+            for h in reversed(dialog_history):
+                if h.get("role") == "assistant":
+                    last_asst = h.get("content", "").strip().lower()
+                    break
+            if last_asst:
+                is_clarifying = (
+                    "what would you like" in last_asst
+                    or "what do you want" in last_asst
+                    or "look up" in last_asst
+                    or "search" in last_asst
+                    or "tell me what" in last_asst
+                    or "type of" in last_asst
+                    or "kind of" in last_asst
+                    or "qué quisieras" in last_asst
+                    or "qué buscas" in last_asst
+                    or "cuál" in last_asst
+                    or "ayudarte a buscar" in last_asst
+                    or (last_asst.endswith("?") and any(w in last_asst for w in ["search", "buscar", "look", "printer", "impresora"]))
+                )
+                words = clean.split()
+                is_substantive = len(words) >= 2 and not any(w in clean for w in ["hola", "buen dia", "buenas", "chau", "adios", "gracias", "ok", "si", "no"])
+                if is_clarifying and is_substantive:
+                    q = f"search for {text.strip()}"
+                    logger.info(f"[ExpertSupervisor] Multi-turn follow-up detected: assistant='{last_asst[:40]}...', user='{text}' -> query='{q}'")
+                    return True, q, provider_override
+
+        # 4. If auto_delegate is enabled and query is substantive (> 30 chars and contains question marks or inquiry)
         if self.config.auto_delegate:
             is_question = "?" in text or "¿" in text or clean.startswith(("qué", "que", "cómo", "como", "por qué", "porque", "cuál", "cual", "quién", "quien", "how", "what", "why", "where", "who"))
             is_longer = len(clean.split()) >= 4
@@ -286,9 +323,10 @@ class ExpertSupervisor:
         r"call\s+the\s+expert\s+delegation",
         r"(llama|llamale|preguntale|pasa|pasale|usa|delega)\s+(al?\s+|un\s+)?(experto|supervisor|groq)",
         r"^(calculate|comput[eo]|calcul[aá])\s+(that|this|it|eso|esto)[\s.!?,]*$",
-        r"^(can\s+you\s+)?(do|search|find|check|look\s*up)\s+(it|that|this)[\s.!?,]*$",
+        r"^(can\s+you\s+|could\s+you\s+|please\s+)?(help\s+me\s+(to\s+)?)?(do|search|find|check|look\s*up)\s*(it|that|this|for\s+it|please)?[\s.!?,]*$",
+        r"^(can\s+you\s+help\s+me\s+to\s+search|can\s+you\s+search|search\s+it|look\s+it\s+up)[\s.!?,]*$",
         r"^(okay\s+|ok\s+)?(can\s+you\s+)?do\s+it[\s.!?,]*$",
-        r"^(puedes|podes|hacelo|buscalo|fijate|dale|averigualo)[\s.!?,]*$",
+        r"^(puedes|podes|hacelo|buscalo|fijate|dale|averigualo|ayudame\s+a\s+buscar)[\s.!?,]*$",
         r"\b(let\s+me|i('ll|\s+will)|i\s+can)\s+(search|look\s*up)\b",
         r"\bsearch\s+(it|for\s+it|for\s+you)\b",
         r"^where\s+(are|is)\s+(them|it|the\s+calculation)",
@@ -406,22 +444,21 @@ class ExpertSupervisor:
     # ── Passive Response Guardrail ──────────────────────────────────────────
     # Patterns that match empty/passive AI responses that don't actually help
     _PASSIVE_PATTERNS = [
-        r"^(sure|ok(ay)?|alright|of course|certainly|sounds good|yeah|yes|great|got it|right)[\s,!.]*$",
-        r"^(sure|ok(ay)?|alright|of course|certainly),?\s+(let'?s\s+(do|talk|discuss|get|try)|i\s+can\s+help|that'?s\s+(interesting|great|cool|nice))",
-        r"^(okay|ok|sure|yeah),?\s+(let\s+me|i('ll|\s+will)|i\s+can)\s+(search|look|find|check)",
-        r"^(bueno|dale|claro|si),?\s+(d[eé]jame|voy\s+a|puedo)\s+(buscar|averiguar|fijarme)",
+        r"^(sure(\s+thing)?|ok(ay)?|alright|of course|certainly|sounds good|yeah|yes|great|got it|right|no problem|will do|you got it)[\s,!.]*$",
+        r"^(sure(\s+thing)?|ok(ay)?|alright|of course|certainly),?\s+(let'?s\s+(do|talk|discuss|get|try)|i\s+can\s+help|that'?s\s+(interesting|great|cool|nice))",
+        r"^(okay|ok|sure(\s+thing)?|yeah),?\s+(let\s+me|i('ll|\s+will)|i\s+can)\s+(search|look|find|check)",
+        r"^(bueno|dale|claro|si|por supuesto|de acuerdo|no hay problema|entendido|perfecto)[\s,!.]*$",
+        r"^(claro|por supuesto|de acuerdo),?\s+(hablemos|vamos|hagamos)",
         r"\b(let\s+me\s+search\s+for\s+you|i\s+can\s+search\s+for\s+you)\b",
         r"^(i'?m\s+afraid\s+i\s+can'?t|i\s+can'?t\s+do\s+that)",
-        r"^(claro|por supuesto|de acuerdo|okey|seguro|bueno|dale|bien)[\s,!.]*$",
-        r"^(claro|por supuesto|de acuerdo),?\s+(hablemos|vamos|hagamos)",
     ]
     _PASSIVE_RE = [re.compile(p, re.IGNORECASE) for p in _PASSIVE_PATTERNS]
 
     # Patterns indicating the user made a substantive request (not just small talk)
     _USER_SUBSTANTIVE_PATTERNS = [
-        r"\b(help|develop|build|create|make|code|program|design|calculate|compute|search|find|explain|tell\s+me|show\s+me|can\s+you)\b",
-        r"\b(ayud|desarroll|constru|cre[aá]|progra|diseñ|calcul|busc|explic|dime|muestr|pued[eo]s)\b",
-        r"\b(website|app|application|project|system|tool|page|database|printer|impresora|specs|specifications|hardware|pants|pantalones|ropa|clothes|needle|aguja)\b",
+        r"\b(help|develop|build|create|make|code|program|design|calculate|compute|search|find|explain|tell\s+me|show\s+me|can\s+you|look\s*up|recommend)\b",
+        r"\b(ayud|desarroll|constru|cre[aá]|progra|diseñ|calcul|busc|explic|dime|muestr|pued[eo]s|recomiend)\b",
+        r"\b(website|app|application|project|system|tool|page|database|printer|impresora|specs|specifications|hardware|pants|pantalones|ropa|clothes|needle|aguja|bakery|bakeries|panaderia|panadería|restaurant|restaurante|cafe|coffee|store|shop|place|places|lugar|lugares)\b",
         r"\b(expert|supervisor|agy|claude|minimax|groq|delegate|delega)\b",
         r"\b(call\s+the\s+expert|llam[aá]\s+al\s+experto|consult|delegat?e?|pedi[rl]e)\b",
     ]

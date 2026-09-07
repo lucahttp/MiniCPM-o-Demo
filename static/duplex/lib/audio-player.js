@@ -147,6 +147,8 @@ export class AudioPlayer {
         if (this._playing || (this._turnActive && this._playbackStartTime > 0)) {
             if (!this._playing) {
                 this._playing = true;
+                this._playbackStartTime = performance.now();
+                this._playbackStartCtxTime = this._ctx.currentTime;
                 if (this._ctx.state === 'suspended') this._ctx.resume();
                 if (this._nextTime < this._ctx.currentTime) {
                     this._nextTime = this._ctx.currentTime;

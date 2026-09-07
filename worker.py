@@ -2427,14 +2427,6 @@ async def duplex_ws(ws: WebSocket):
             sps = 0.1
         elif user_is_speaking:
             # 用户正在发言
-            pending_expert_text = None
-            audio_gate.reset()
-            if expert_task and not expert_task.done():
-                expert_task.cancel()
-                try:
-                    await ws.send_json({"type": "expert_status", "status": "cancelled"})
-                except Exception:
-                    pass
             user_speech_active = True
             consecutive_speech_chunks += 1
             consecutive_silence_chunks = 0
@@ -2572,7 +2564,7 @@ async def duplex_ws(ws: WebSocket):
                             expert_task = asyncio.create_task(_run_expert(q, None))
                         else:
                             # 2. Fallback a detección de intención lingüística
-                            should_delegate, extracted_query, prov_override = expert_supervisor.detect_delegation_intent(turn_text)
+                            should_delegate, extracted_query, prov_override = expert_supervisor.detect_delegation_intent(turn_text, session_dialog_history)
                             if should_delegate:
                                 q = extracted_query or turn_text
                                 logger.info(f"[ExpertSupervisor] Delegating to expert (intent): '{q[:80]}' (prov={prov_override or expert_supervisor.config.provider.value})")
@@ -3011,7 +3003,7 @@ async def duplex_ws(ws: WebSocket):
                     # Check for direct delegation from user utterance
                     is_expert_running = expert_task and not expert_task.done()
                     if expert_supervisor.is_enabled() and not is_expert_running:
-                        should_del, q, prov = expert_supervisor.detect_delegation_intent(user_text)
+                        should_del, q, prov = expert_supervisor.detect_delegation_intent(user_text, session_dialog_history[:-1])
                         if should_del:
                             target_q = q or user_text
                             logger.info(f"[Duplex] User speech triggered expert delegation: '{target_q[:80]}' (prov={prov})")
