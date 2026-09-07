@@ -2153,6 +2153,7 @@ async def duplex_ws(ws: WebSocket):
     worker.state.status = WorkerStatus.DUPLEX_ACTIVE
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
     worker.state.current_session_id = f"{ts}_{client_session_id}" if client_session_id else f"{ts}_duplex"
+    session_id = client_session_id or worker.state.current_session_id
     # Duplex 会重置模型状态（prepare 会调用），Gateway 侧已清除 cached_hash
 
     pause_timeout_task: Optional[asyncio.Task] = None
@@ -2745,18 +2746,26 @@ async def duplex_ws(ws: WebSocket):
                 expert_cfg_dict = msg.get("expert_config")
                 if expert_cfg_dict:
                     try:
-                        prov_str = str(expert_cfg_dict.get("provider", "agy")).lower()
-                        prov = ExpertProvider(prov_str) if prov_str in [p.value for p in ExpertProvider] else ExpertProvider.AGY
+                        default_prov = expert_supervisor.config.provider.value
+                        prov_str = str(expert_cfg_dict.get("provider", default_prov)).lower()
+                        prov = ExpertProvider(prov_str) if prov_str in [p.value for p in ExpertProvider] else expert_supervisor.config.provider
                         expert_config = ExpertConfig(
                             provider=prov,
                             enabled=bool(expert_cfg_dict.get("enabled", True)),
                             agy_path=expert_cfg_dict.get("agy_path") or expert_supervisor.config.agy_path,
                             claude_path=expert_cfg_dict.get("claude_path") or expert_supervisor.config.claude_path,
-                            minimax_api_key=expert_cfg_dict.get("minimax_api_key") or os.environ.get("MINIMAX_API_KEY"),
-                            minimax_group_id=expert_cfg_dict.get("minimax_group_id") or os.environ.get("MINIMAX_GROUP_ID"),
-                            openai_api_key=expert_cfg_dict.get("openai_api_key") or os.environ.get("OPENAI_API_KEY"),
-                            openai_base_url=expert_cfg_dict.get("openai_base_url") or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-                            openai_model=expert_cfg_dict.get("openai_model") or "gpt-4o-mini",
+                            minimax_api_key=expert_cfg_dict.get("minimax_api_key") or expert_supervisor.config.minimax_api_key,
+                            minimax_group_id=expert_cfg_dict.get("minimax_group_id") or expert_supervisor.config.minimax_group_id,
+                            minimax_api_base=expert_cfg_dict.get("minimax_api_base") or expert_supervisor.config.minimax_api_base,
+                            openai_api_key=expert_cfg_dict.get("openai_api_key") or expert_supervisor.config.openai_api_key,
+                            openai_base_url=expert_cfg_dict.get("openai_base_url") or expert_supervisor.config.openai_base_url,
+                            openai_model=expert_cfg_dict.get("openai_model") or expert_supervisor.config.openai_model,
+                            slow_loop_api_base=expert_cfg_dict.get("slow_loop_api_base") or expert_supervisor.config.slow_loop_api_base,
+                            slow_loop_api_key=expert_cfg_dict.get("slow_loop_api_key") or expert_supervisor.config.slow_loop_api_key,
+                            slow_loop_model=expert_cfg_dict.get("slow_loop_model") or expert_supervisor.config.slow_loop_model,
+                            groq_api_base=expert_cfg_dict.get("groq_api_base") or expert_supervisor.config.groq_api_base,
+                            groq_api_key=expert_cfg_dict.get("groq_api_key") or expert_supervisor.config.groq_api_key,
+                            groq_model=expert_cfg_dict.get("groq_model") or expert_supervisor.config.groq_model,
                         )
                         expert_supervisor = ExpertSupervisor(expert_config)
                         logger.info(f"[Duplex] Expert supervisor configured: provider={prov.value}, enabled={expert_config.enabled}")

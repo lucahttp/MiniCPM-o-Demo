@@ -1115,7 +1115,7 @@ async function startSession() {
         config: { length_penalty: parseFloat(document.getElementById('duplexLengthPenalty').value) || 1.0 },
         expert_config: {
             enabled: !!document.getElementById('expertEnabled')?.checked,
-            provider: document.getElementById('expertProvider')?.value || 'agy',
+            provider: document.getElementById('expertProvider')?.value || 'groq',
         },
     };
     const refBase64 = refAudio.getBase64();
@@ -1393,7 +1393,7 @@ const btnAskExpert = document.getElementById('btnAskExpert');
 function submitExpertQuery() {
     const query = expertQuickInput?.value?.trim();
     if (!query) return;
-    const prov = document.getElementById('expertProvider')?.value || 'agy';
+    const prov = document.getElementById('expertProvider')?.value || 'groq';
     if (session && session.ws && session.ws.readyState === WebSocket.OPEN) {
         session.ws.send(JSON.stringify({
             type: 'ask_expert',

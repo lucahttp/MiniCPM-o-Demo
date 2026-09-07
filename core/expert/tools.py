@@ -213,6 +213,36 @@ class InstantToolRegistry:
         return self.filesystem(action="list", path=path)
 
     # ------------------------------------------------------------------------
+    # Tool 5: WebSearch
+    # ------------------------------------------------------------------------
+    def web_search(self, query: str, max_results: int = 5) -> str:
+        """
+        Busca en internet en tiempo real especificaciones técnicas, información de hardware,
+        manuales, soluciones a problemas, etc.
+        """
+        clean_q = str(query).strip().strip("'\"")
+        if not clean_q:
+            return "Por favor indica qué deseas buscar en internet."
+        try:
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
+            results = list(DDGS().text(clean_q, max_results=max_results))
+            if not results:
+                return f"No se encontraron resultados web específicos para '{clean_q}'."
+            formatted = []
+            for r in results:
+                title = r.get("title", "").strip()
+                snippet = r.get("body", "").strip()
+                link = r.get("href", "").strip()
+                formatted.append(f"• {title}: {snippet} ({link})")
+            return "Resultados de búsqueda web:\n" + "\n".join(formatted)
+        except Exception as e:
+            logger.warning(f"Error en web_search ('{clean_q}'): {e}")
+            return f"No se pudo completar la búsqueda web: {str(e)}"
+
+    # ------------------------------------------------------------------------
     # MCP Server Factory
     # ------------------------------------------------------------------------
     def get_mcp_server(self, name: str = "InstantToolRegistry") -> InProcessMCPServer:
@@ -298,6 +328,23 @@ class InstantToolRegistry:
                 "required": ["action", "path"],
             },
             handler=self.filesystem,
+        )
+
+        # 5. WebSearch
+        server.register_tool(
+            name="web_search",
+            description="Busca en internet en tiempo real especificaciones técnicas, información de hardware, manuales, soluciones o precios.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Consulta de búsqueda concreta (ej. 'Kodak Portrait 3D printer specifications')",
+                    }
+                },
+                "required": ["query"],
+            },
+            handler=self.web_search,
         )
 
         return server
@@ -497,18 +544,23 @@ class ToolDispatcher:
         if hasattr(self.registry, tool_name):
             func = getattr(self.registry, tool_name)
             try:
-                if pos_arg is not None:
-                    # If function expects named parameters, adapt first parameter
-                    sig = inspect.signature(func)
-                    params = list(sig.parameters.keys())
-                    if params and len(params) == 1:
-                        res = func(pos_arg)
+                def _invoke():
+                    if pos_arg is not None:
+                        sig = inspect.signature(func)
+                        params = list(sig.parameters.keys())
+                        if params and len(params) == 1:
+                            return func(pos_arg)
+                        else:
+                            first_param = params[0] if params else "expr"
+                            clean_args[first_param] = pos_arg
+                            return func(**clean_args)
                     else:
-                        first_param = params[0] if params else "expr"
-                        clean_args[first_param] = pos_arg
-                        res = func(**clean_args)
+                        return func(**clean_args)
+
+                if asyncio.iscoroutinefunction(func):
+                    res = await func(**clean_args) if pos_arg is None else await _invoke()
                 else:
-                    res = func(**clean_args)
+                    res = await asyncio.to_thread(_invoke)
 
                 if asyncio.iscoroutine(res):
                     res = await res

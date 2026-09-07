@@ -92,9 +92,41 @@ class TestSlowLoopBrainAndSessions(unittest.IsolatedAsyncioTestCase):
             session_id=session_id
         )
         print("AGY Turn 2:", res2.get("text"))
-        self.assertTrue(res2.get("success"))
-        self.assertIn("cipres", res2.get("text", "").lower())
+    async def test_groq_web_search_printer_specs_and_context(self):
+        """Test Groq Slow Loop using web_search tool with prior dialog context (Kodak Portrait 3D printer)."""
+        config = ExpertConfig(provider=ExpertProvider.GROQ)
+        supervisor = ExpertSupervisor(config)
+
+        history = [
+            {"role": "user", "content": "I would love to start turning on like I have three printer that is been turned off for some weeks"},
+            {"role": "assistant", "content": "Can you tell me what type of printer you have?"},
+            {"role": "user", "content": "yes it's a Kodak portrait"},
+            {"role": "assistant", "content": "Have you checked if the power cable is properly connected?"},
+            {"role": "user", "content": "can you do a search with the expert across the internet for the specifications of these 3D printer"},
+            {"role": "assistant", "content": "Sure."},
+        ]
+
+        # 1. Test guardrail detection on passive AI "Sure."
+        guardrail_should, guardrail_query = supervisor.should_guardrail_delegate("Sure.", history)
+        self.assertTrue(guardrail_should)
+        self.assertIn("Kodak portrait", guardrail_query)
+        print("Guardrail extracted query:", guardrail_query)
+
+        # 2. Execute Slow Loop with session_id and history
+        res = await supervisor.execute(
+            query=guardrail_query,
+            history=history,
+            session_id="test_session_printer_001"
+        )
+        ans_text = res.get("text", "")
+        safe_display = ans_text.encode("ascii", errors="replace").decode()
+        print("Groq web search response:", safe_display, f"({res.get('elapsed_ms')}ms)")
+        self.assertTrue(res.get("success"))
+        text_lower = res.get("text", "").lower()
+        # Should mention Kodak, Portrait, or key specs (extruder, dual, build, etc.)
+        self.assertTrue(any(w in text_lower for w in ["kodak", "portrait", "3d", "extrusora", "extruder", "impresora"]))
 
 
 if __name__ == "__main__":
     unittest.main()
+

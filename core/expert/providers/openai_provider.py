@@ -12,6 +12,26 @@ SLOW_LOOP_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "web_search",
+            "description": (
+                "Busca en internet en tiempo real especificaciones técnicas, información de hardware, manuales, "
+                "soluciones a problemas de dispositivos (como impresoras 3D), documentación, precios o datos actualizados."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Consulta de búsqueda concreta (ej. 'Kodak Portrait 3D printer specifications features troubleshooting')."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "delegate_to_agy",
             "description": (
                 "Delega tareas que involucren operar la computadora, ejecutar comandos de terminal (PowerShell/Bash), "
@@ -137,16 +157,20 @@ class OpenAIExpertProvider(BaseExpertProvider):
             raise RuntimeError("OpenAI-compatible API key is not configured")
 
         default_sys = (
-            "Eres el director cognitivo de un asistente de voz en tiempo real. "
-            "Responde de forma clara, directa y natural en 1 o 2 oraciones para ser leída por voz. "
-            "Si la consulta requiere operar la computadora, ejecutar comandos de terminal, inspeccionar o editar código, "
-            "llama a la herramienta 'delegate_to_agy'. Si requiere matemáticas exactas, llama a 'calculator'. "
-            "Para preguntas de conocimiento, explicaciones o diálogo general, responde DIRECTAMENTE sin herramientas."
+            "Eres el director cognitivo (Slow Loop Brain) de un asistente de voz dúplex en tiempo real. "
+            "Tienes acceso al historial reciente de conversación para resolver pronombres y referencias anteriores "
+            "(por ejemplo, entender a qué impresora, dispositivo o software se refiere el usuario). "
+            "Herramientas disponibles: "
+            "1. 'web_search': Úsala para buscar especificaciones técnicas, fallas conocidas, manuales o datos de internet sobre cualquier producto o dispositivo. "
+            "2. 'delegate_to_agy': Úsala para operar la computadora, ejecutar comandos en terminal (PowerShell/bash), editar código o correr tests. "
+            "3. 'calculator': Úsala para operaciones numéricas exactas. "
+            "4. Para conocimiento general o explicaciones conceptuales, responde DIRECTAMENTE sin herramientas. "
+            "Tu respuesta final debe ser precisa, informativa, natural y sintetizada en 1 a 3 oraciones para ser hablada por voz."
         )
 
         messages = [{"role": "system", "content": system_prompt or default_sys}]
         if history:
-            for h in history[-4:]:
+            for h in history[-8:]:
                 role = "assistant" if h.get("role") == "assistant" else "user"
                 messages.append({"role": role, "content": h.get("content", "")})
         messages.append({"role": "user", "content": query})
@@ -223,7 +247,7 @@ class OpenAIExpertProvider(BaseExpertProvider):
                 "model": self.model,
                 "messages": messages,
                 "temperature": 0.3,
-                "max_tokens": 256,
+                "max_tokens": 384,
             }
             logger.info(f"[Expert:SlowLoop] Sending follow-up for voice synthesis after tool execution...")
             followup_resp = await client.post(url, headers=headers, json=followup_payload)

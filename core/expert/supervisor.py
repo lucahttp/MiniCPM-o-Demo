@@ -17,21 +17,26 @@ logger = logging.getLogger(__name__)
 # Trigger keywords for delegation (Spanish and English explicit intent)
 _EXPLICIT_TRIGGERS = [
     # Spanish explicit delegation intent (both user requesting and assistant announcing)
-    r"\b(d[eé]jame|voy\s+a|un\s+segundo,?\s+voy\s+a|espera\s+que)\s+(consultar|preguntar|averiguar|pedirle|buscar)\s+(con\s+el\s+|al?\s+)?(experto|supervisor|agy|claude|minimax)\b",
-    r"\b(consult[aá](ndo|r[eé])?|pregunt[aá](ndo|r[eé])?)\s+(al?\s+|con\s+el\s+)?(experto|supervisor|agy|claude|minimax)\b",
-    r"\b(preg[uú]ntale?\s+a|consult[aá](le)?\s+al?)\s+(agy|claude|minimax|experto)\b",
-    r"\b(le\s+pregunto\s+al?\s+(experto|supervisor|agy|claude|minimax))\b",
-    r"\b(consultando\s+al?\s+(experto|supervisor|agy|claude|minimax))\b",
-    r"\b(llam[aá](r|le)?|pas[aá](r|le)?|us[aá](r)?|deleg[aá](r)?)\s+(al?\s+|con\s+el\s+)?(experto|supervisor|agy|claude|minimax)\b",
+    r"\b(d[eé]jame|voy\s+a|un\s+segundo,?\s+voy\s+a|espera\s+que)\s+(consultar|preguntar|averiguar|pedirle|buscar)\s+(con\s+el\s+|al?\s+)?(experto|supervisor|agy|claude|minimax|groq)\b",
+    r"\b(consult[aá](ndo|r[eé])?|pregunt[aá](ndo|r[eé])?)\s+(al?\s+|con\s+el\s+)?(experto|supervisor|agy|claude|minimax|groq)\b",
+    r"\b(preg[uú]ntale?\s+a|consult[aá](le)?\s+al?)\s+(agy|claude|minimax|groq|experto)\b",
+    r"\b(le\s+pregunto\s+al?\s+(experto|supervisor|agy|claude|minimax|groq))\b",
+    r"\b(consultando\s+al?\s+(experto|supervisor|agy|claude|minimax|groq))\b",
+    r"\b(llam[aá](r|le)?|pas[aá](r|le)?|us[aá](r)?|deleg[aá](r)?)\s+(al?\s+|con\s+el\s+)?(experto|supervisor|agy|claude|minimax|groq)\b",
     r"\b(experto|supervisor)\s+(para\s+que|que\s+nos\s+ayude|que\s+lo\s+haga)\b",
 
     # English explicit delegation intent (both user requesting and assistant announcing)
-    r"\b(let\s+me|i('ll|\s+will)|one\s+second,?\s+i'll)\s+(check|ask|consult|find\s+out|look\s*up)\s+(with\s+the\s+|the\s+)?(expert|supervisor|agy|claude|minimax)\b",
-    r"\b(consulting|asking)\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
-    r"\b(i'm\s+asking|checking\s+with)\s+(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
-    r"\b(can\s+you\s+|could\s+you\s+|please\s+)?(call|ask|consult|delegate|delayed|pass\s+(it\s+)?to|use)\s+(to\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
+    r"\b(let\s+me|i('ll|\s+will)|one\s+second,?\s+i'll)\s+(check|ask|consult|find\s+out|look\s*up)\s+(with\s+the\s+|the\s+)?(expert|supervisor|agy|claude|minimax|groq)\b",
+    r"\b(consulting|asking)\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax|groq)\b",
+    r"\b(i'm\s+asking|checking\s+with)\s+(the\s+)?(expert|supervisor|agy|claude|minimax|groq)\b",
+    r"\b(can\s+you\s+|could\s+you\s+|please\s+)?(call|ask|consult|delegate|delayed|pass\s+(it\s+)?to|use)\s+(to\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax|groq)\b",
     r"\b(call\s+the\s+expert|call\s+the\s+supervisor|delegate\s+to\s+the\s+expert|delayed\s+to\s+the\s+expert)\b",
-    r"\b(ask(ing)?|consult(ing)?)\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax)\b",
+    r"\b(ask(ing)?|consult(ing)?)\s+(with\s+)?(the\s+)?(expert|supervisor|agy|claude|minimax|groq)\b",
+
+    # Internet / web search / specifications requests
+    r"\b(search|look\s*up|find)\s+(across|on|in)?\s*(the\s+)?(internet|web|online)\b",
+    r"\b(busc[aá](r)?|averigu[aá](r)?)\s+(en\s+)?(internet|la\s+web|en\s+l[ií]nea)\b",
+    r"\b(specifications|specs|especificaciones|manual|datasheet)\s+(of|for|de|para)?\b",
 
     # Complex programming / creation requests that need frontier expert
     r"\b(develop|build|create|code|program)\s+(a\s+|an\s+)?(website|web\s+app|application|script|program|backend|frontend)\b",
@@ -219,7 +224,7 @@ class ExpertSupervisor:
         Formatea el resultado para voz natural.
         """
         if hasattr(self.tool_dispatcher.registry, tool_name):
-            ans = self.tool_dispatcher.execute_tool(tool_name, args)
+            ans = await self.tool_dispatcher.execute_tool_async(tool_name, args)
             if ans.startswith("[EXPERT:"):
                 q = ans[8:-1].strip()
                 res = await self.execute(q)
@@ -256,12 +261,12 @@ class ExpertSupervisor:
             r"d[eé]jame\s+(consultar|averiguar|buscar|investigar|preguntar)|"
             r"voy\s+a\s+(consultar|averiguar|buscar|investigar|preguntar)|"
             r"(un\s+segundo|un\s+momento|dame\s+un\s+segundo|dame\s+un\s+momento),?\s*(voy\s+a\s+|le\s+)?(consultar|preguntar|averiguar|pido)?|"
-            r"espera\s+(un\s+momento,?\s+|un\s+segundo,?\s+)?(que\s+)?(le\s+pregunto|consulto|averiguo)?)\s*(con\s+el\s+|al?\s+)?(experto|supervisor|agy|claude|minimax)?\s*(about\s+|sobre\s+|para\s+)?",
+            r"espera\s+(un\s+momento,?\s+|un\s+segundo,?\s+)?(que\s+)?(le\s+pregunto|consulto|averiguo)?)\s*(con\s+el\s+|al?\s+)?(experto|supervisor|agy|claude|minimax|groq)?\s*(about\s+|sobre\s+|para\s+)?",
             "",
             q,
             flags=re.IGNORECASE
         )
-        q = re.sub(r"\b(with\s+(the\s+)?expert|al?\s+experto|con\s+el\s+experto)\b", "", q, flags=re.IGNORECASE).strip()
+        q = re.sub(r"\b(with\s+(the\s+)?(expert|supervisor|agy|claude|minimax|groq)|al?\s+experto|con\s+el\s+experto)\b", "", q, flags=re.IGNORECASE).strip()
         q = q.strip(".,;:?! ")
         return q or text.strip()
 
@@ -271,10 +276,13 @@ class ExpertSupervisor:
         return random.choice(phrases)
 
     _META_PATTERNS = [
-        r"(call|ask|consult|delegate|delayed|pass|use)\s+(to\s+)?(the\s+|an?\s+)?(expert|supervisor|agy|claude|minimax)",
+        r"(call|ask|consult|delegate|delayed|pass|use)\s+(to\s+)?(the\s+|an?\s+)?(expert|supervisor|agy|claude|minimax|groq)",
         r"call\s+the\s+expert\s+delegation",
-        r"(llama|llamale|preguntale|pasa|pasale|usa|delega)\s+(al?\s+|un\s+)?(experto|supervisor)",
+        r"(llama|llamale|preguntale|pasa|pasale|usa|delega)\s+(al?\s+|un\s+)?(experto|supervisor|groq)",
         r"^(calculate|comput[eo]|calcul[aá])\s+(that|this|it|eso|esto)[\s.!?,]*$",
+        r"^(can\s+you\s+)?(do|search|find|check|look\s*up)\s+(it|that|this)[\s.!?,]*$",
+        r"^(okay\s+|ok\s+)?(can\s+you\s+)?do\s+it[\s.!?,]*$",
+        r"^(puedes|podes|hacelo|buscalo|fijate|dale|averigualo)[\s.!?,]*$",
         r"^where\s+(are|is)\s+(them|it|the\s+calculation)",
         r"^no\s+i\s+mean\s+",
     ]
@@ -402,8 +410,8 @@ class ExpertSupervisor:
     _USER_SUBSTANTIVE_PATTERNS = [
         r"\b(help|develop|build|create|make|code|program|design|calculate|compute|search|find|explain|tell\s+me|show\s+me|can\s+you)\b",
         r"\b(ayud|desarroll|constru|cre[aá]|progra|diseñ|calcul|busc|explic|dime|muestr|pued[eo]s)\b",
-        r"\b(website|app|application|project|system|tool|page|database)\b",
-        r"\b(expert|supervisor|agy|claude|delegate|delega)\b",
+        r"\b(website|app|application|project|system|tool|page|database|printer|impresora|specs|specifications|hardware)\b",
+        r"\b(expert|supervisor|agy|claude|minimax|groq|delegate|delega)\b",
         r"\b(call\s+the\s+expert|llam[aá]\s+al\s+experto|consult|delegat?e?|pedi[rl]e)\b",
     ]
     _USER_SUBSTANTIVE_RE = [re.compile(p, re.IGNORECASE) for p in _USER_SUBSTANTIVE_PATTERNS]
@@ -423,16 +431,15 @@ class ExpertSupervisor:
         return False
 
     def extract_user_request_from_history(self, history: List[Dict[str, str]]) -> Optional[str]:
-        """Get the most recent substantive user request from dialog history."""
+        """Get the most recent substantive user request from dialog history in chronological order."""
         if not history:
             return None
-        # Look at last 4 user turns
-        user_turns = [h["content"] for h in reversed(history) if h.get("role") == "user"][:4]
+        # Look at last 4 user turns in chronological order
+        user_turns = [h["content"] for h in history if h.get("role") == "user"][-4:]
         # Concatenate recent user turns for context
         combined = " ".join(user_turns)
         for pat in self._USER_SUBSTANTIVE_RE:
             if pat.search(combined):
-                # Return the most recent substantive turn
                 return combined.strip()
         return None
 
